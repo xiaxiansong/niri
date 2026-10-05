@@ -2543,6 +2543,18 @@ impl<W: LayoutElement> Layout<W> {
                     assert_eq!(self.clock, move_.tile.clock);
                     assert!(move_.tile.window().pending_sizing_mode().is_normal());
 
+                    let state = move_.tile.window().scratchpad_state();
+                    assert_ne!(
+                        state,
+                        ScratchpadState::Hidden,
+                        "interactively moved window cannot be hidden in the scratchpad"
+                    );
+                    assert_eq!(
+                        move_.tile.in_scratchpad,
+                        state == ScratchpadState::Shown,
+                        "interactively moved tile scratchpad flag must match the window state"
+                    );
+
                     move_.tile.verify_invariants();
 
                     let scale = move_.output.current_scale().fractional_scale();
@@ -2592,6 +2604,66 @@ impl<W: LayoutElement> Layout<W> {
                     }
                 }
             }
+        }
+
+        let mut seen_window_ids = Vec::new();
+        if let Some(move_) = self.interactive_move.as_ref().and_then(|x| x.moving()) {
+            seen_window_ids.push(move_.tile.window().id().clone());
+        }
+
+        for tile in &self.scratchpad.hidden {
+            assert_eq!(self.clock, tile.clock);
+            tile.verify_invariants();
+
+            assert!(tile.in_scratchpad, "hidden tile must be in the scratchpad");
+            assert_eq!(
+                tile.window().scratchpad_state(),
+                ScratchpadState::Hidden,
+                "hidden tile window must be hidden in the scratchpad"
+            );
+            assert!(
+                !tile.are_transitions_ongoing(),
+                "hidden scratchpad tiles cannot animate"
+            );
+
+            seen_window_ids.push(tile.window().id().clone());
+        }
+
+        for (_, _, ws) in self.workspaces() {
+            for tile in ws.scrolling().tiles() {
+                assert!(
+                    !tile.in_scratchpad,
+                    "scrolling tiles cannot be in the scratchpad"
+                );
+                assert_eq!(
+                    tile.window().scratchpad_state(),
+                    ScratchpadState::None,
+                    "scrolling tile windows cannot be in the scratchpad"
+                );
+            }
+
+            for tile in ws.floating().tiles() {
+                let state = tile.window().scratchpad_state();
+                assert_ne!(
+                    state,
+                    ScratchpadState::Hidden,
+                    "floating tile windows cannot be hidden in the scratchpad"
+                );
+                assert_eq!(
+                    tile.in_scratchpad,
+                    state == ScratchpadState::Shown,
+                    "floating tile scratchpad flag must match the window state"
+                );
+            }
+
+            seen_window_ids.extend(ws.windows().map(|win| win.id().clone()));
+        }
+
+        for (i, id) in seen_window_ids.iter().enumerate() {
+            assert!(
+                !seen_window_ids[i + 1..].contains(id),
+                "window must be in the layout at most once: {id:?}"
+            );
         }
 
         let mut seen_workspace_id = HashSet::new();
