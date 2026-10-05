@@ -359,6 +359,7 @@ fn remove_window_impl(&mut self, window: &W::Id, transaction: Transaction, fill_
 - 呈现：`activate=true` 时被呈现的窗口获得焦点，浮动层成为活动层。
 - 隐藏：交给现有逻辑。`Workspace::remove_tile()` → `update_focus_floating_tiling_after_removing()`：浮动层还有窗口则聚焦最上层的，否则回到平铺层活动列。
 - 跟随：只保留原工作区内的焦点关系（§4.7）。暂存窗口原本是该工作区的焦点窗口，跟随后仍是；否则跟随后不抢焦点。
+- 跟随由“激活某个具体窗口”引起时，该窗口保持焦点，暂存窗口照常跟随但不抢焦点（M4 实现时发现，经用户同意补入）。涉及 `Layout::activate_window()`（任务栏、Alt-Tab、`focus-window --id`、`focus-window-previous`、xdg-activation）、`Layout::activate_window_without_raising()`（focus-follows-mouse，如 Overview 中悬停其他工作区的窗口；实现时补入，同一规则）和 `Monitor::add_tile()` / `add_column()` / `add_tile_to_column()` 的激活分支（带焦点移动窗口/列、带激活打开在其他工作区的新窗口）。原因：这些路径先在目标工作区内激活窗口、再切换工作区，切换触发的跟随会按上一条把原焦点暂存窗口激活，抢走焦点；把源工作区最后一个平铺窗口带焦点移走时，源工作区的焦点会先落到暂存窗口上，结果相同。做法：切换工作区之后，按工作区 id 找回目标工作区，再对目标窗口调用一次 `Workspace::activate_window()`。只有普通的工作区切换（按键、手势、bar）保留暂存窗口的焦点。
 - 键盘焦点、弹出菜单 grab：由 `Niri::update_keyboard_focus` 根据 `layout.focus()` 重算；焦点离开 grab 根时现有代码会 ungrab（`niri.rs` 约 1436 行）。
 
 ### 4.5 Layout 层实现
