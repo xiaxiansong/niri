@@ -14,8 +14,8 @@ use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
 use super::scrolling::{Column, ColumnWidth};
 use super::tile::Tile;
 use super::workspace::{
-    compute_working_area, OutputId, Workspace, WorkspaceAddWindowTarget, WorkspaceId,
-    WorkspaceRenderElement,
+    compute_working_area, resize_edges_for_tile, OutputId, Workspace, WorkspaceAddWindowTarget,
+    WorkspaceId, WorkspaceRenderElement,
 };
 use super::{compute_overview_zoom, ActivateWindow, HitType, LayoutElement, Options};
 use crate::animation::{Animation, Clock};
@@ -1688,17 +1688,32 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn window_under(&self, pos_within_output: Point<f64, Logical>) -> Option<(&W, HitType)> {
+        // Pinned scratchpad windows are on top of everything else.
+        let pin_geo = self.scratchpad_pin_geo();
+        if let Some(geo) = pin_geo {
+            let ws = &self.workspaces[self.active_workspace_idx];
+            let pos_within_workspace = pos_within_output - geo.loc;
+            if let Some((win, hit)) =
+                ws.scratchpad_tiles_with_render_positions()
+                    .find_map(|(tile, tile_pos)| {
+                        HitType::hit_tile(tile, tile_pos, pos_within_workspace)
+                    })
+            {
+                return Some((win, hit.offset_win_pos(geo.loc)));
+            }
+        }
+
         let (ws, geo) = self.workspace_under(pos_within_output)?;
 
         if self.overview_progress.is_some() {
             let zoom = self.overview_zoom();
             let pos_within_workspace = (pos_within_output - geo.loc).downscale(zoom);
-            let (win, hit) = ws.window_under(pos_within_workspace)?;
+            let (win, hit) = ws.window_under(pos_within_workspace, false)?;
             // During the overview animation, we cannot do input hits because we cannot really
             // represent scaled windows properly.
             Some((win, hit.to_activate()))
         } else {
-            let (win, hit) = ws.window_under(pos_within_output - geo.loc)?;
+            let (win, hit) = ws.window_under(pos_within_output - geo.loc, pin_geo.is_some())?;
             Some((win, hit.offset_win_pos(geo.loc)))
         }
     }
@@ -1708,8 +1723,23 @@ impl<W: LayoutElement> Monitor<W> {
             return None;
         }
 
+        // Pinned scratchpad windows are on top of everything else.
+        let pin_geo = self.scratchpad_pin_geo();
+        if let Some(geo) = pin_geo {
+            let ws = &self.workspaces[self.active_workspace_idx];
+            let pos_within_workspace = pos_within_output - geo.loc;
+            if let Some(edges) =
+                ws.scratchpad_tiles_with_render_positions()
+                    .find_map(|(tile, tile_pos)| {
+                        resize_edges_for_tile(tile, pos_within_workspace - tile_pos)
+                    })
+            {
+                return Some(edges);
+            }
+        }
+
         let (ws, geo) = self.workspace_under(pos_within_output)?;
-        ws.resize_edges_under(pos_within_output - geo.loc)
+        ws.resize_edges_under(pos_within_output - geo.loc, pin_geo.is_some())
     }
 
     pub(super) fn insert_position(

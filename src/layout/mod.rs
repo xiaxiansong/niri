@@ -4513,7 +4513,7 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let Some((mon, (ws, ws_geo))) = self.monitors().find_map(|mon| {
-            mon.workspaces_with_render_geo()
+            mon.workspaces_with_render_geo_cull(false)
                 .find(|(ws, _)| ws.has_window(&window_id))
                 .map(|rv| (mon, rv))
         }) else {
@@ -4531,6 +4531,18 @@ impl<W: LayoutElement> Layout<W> {
             .tiles_with_render_positions()
             .find(|(tile, _, _)| tile.window().id() == &window_id)
             .unwrap();
+
+        let ws_geo = match mon.scratchpad_pin_geo() {
+            // Pinned scratchpad windows are visible even if their workspace isn't.
+            Some(pin_geo) if is_floating && tile.in_scratchpad => pin_geo,
+            _ => {
+                let output_geo = Rectangle::from_size(mon.view_size());
+                if ws_geo.intersection(output_geo).is_none() {
+                    return false;
+                }
+                ws_geo
+            }
+        };
         let window_offset = tile.window_loc();
 
         let tile_pos = ws_geo.loc + tile_offset.upscale(zoom);

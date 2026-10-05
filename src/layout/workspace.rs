@@ -1915,12 +1915,17 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.start_open_animation(id) || self.floating.start_open_animation(id)
     }
 
-    pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<(&W, HitType)> {
+    pub fn window_under(
+        &self,
+        pos: Point<f64, Logical>,
+        skip_scratchpad: bool,
+    ) -> Option<(&W, HitType)> {
         // This logic is consistent with tiles_with_render_positions().
         if self.is_floating_visible() {
             if let Some(rv) = self
                 .floating
                 .tiles_with_render_positions()
+                .filter(|(tile, _)| !(skip_scratchpad && tile.in_scratchpad))
                 .find_map(|(tile, tile_pos)| HitType::hit_tile(tile, tile_pos, pos))
             {
                 return Some(rv);
@@ -1930,36 +1935,33 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.window_under(pos)
     }
 
-    pub fn resize_edges_under(&self, pos: Point<f64, Logical>) -> Option<ResizeEdge> {
+    pub fn resize_edges_under(
+        &self,
+        pos: Point<f64, Logical>,
+        skip_scratchpad: bool,
+    ) -> Option<ResizeEdge> {
         self.tiles_with_render_positions()
             .find_map(|(tile, tile_pos, visible)| {
                 // This logic should be consistent with window_under() in when it returns Some vs.
                 // None.
-                if !visible {
+                if !visible || (skip_scratchpad && tile.in_scratchpad) {
                     return None;
                 }
 
-                let pos_within_tile = pos - tile_pos;
-
-                if tile.hit(pos_within_tile).is_some() {
-                    let size = tile.tile_size().to_f64();
-
-                    let mut edges = ResizeEdge::empty();
-                    if pos_within_tile.x < size.w / 3. {
-                        edges |= ResizeEdge::LEFT;
-                    } else if 2. * size.w / 3. < pos_within_tile.x {
-                        edges |= ResizeEdge::RIGHT;
-                    }
-                    if pos_within_tile.y < size.h / 3. {
-                        edges |= ResizeEdge::TOP;
-                    } else if 2. * size.h / 3. < pos_within_tile.y {
-                        edges |= ResizeEdge::BOTTOM;
-                    }
-                    return Some(edges);
-                }
-
-                None
+                resize_edges_for_tile(tile, pos - tile_pos)
             })
+    }
+
+    /// Shown scratchpad tiles from top to bottom with their render positions.
+    ///
+    /// Empty if the floating layout isn't visible.
+    pub fn scratchpad_tiles_with_render_positions(
+        &self,
+    ) -> impl Iterator<Item = (&Tile<W>, Point<f64, Logical>)> {
+        let visible = self.is_floating_visible();
+        self.floating
+            .tiles_with_render_positions()
+            .filter(move |(tile, _)| visible && tile.in_scratchpad)
     }
 
     pub fn descendants_added(&mut self, id: &W::Id) -> bool {
@@ -2245,4 +2247,27 @@ fn compute_workspace_shadow_config(
     config.offset.y.0 *= norm;
 
     config
+}
+
+/// Returns the resize edges for a point within the tile, or `None` if the point doesn't hit it.
+pub(super) fn resize_edges_for_tile<W: LayoutElement>(
+    tile: &Tile<W>,
+    pos_within_tile: Point<f64, Logical>,
+) -> Option<ResizeEdge> {
+    tile.hit(pos_within_tile)?;
+
+    let size = tile.tile_size().to_f64();
+
+    let mut edges = ResizeEdge::empty();
+    if pos_within_tile.x < size.w / 3. {
+        edges |= ResizeEdge::LEFT;
+    } else if 2. * size.w / 3. < pos_within_tile.x {
+        edges |= ResizeEdge::RIGHT;
+    }
+    if pos_within_tile.y < size.h / 3. {
+        edges |= ResizeEdge::TOP;
+    } else if 2. * size.h / 3. < pos_within_tile.y {
+        edges |= ResizeEdge::BOTTOM;
+    }
+    Some(edges)
 }
