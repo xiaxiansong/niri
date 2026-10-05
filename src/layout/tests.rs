@@ -4093,6 +4093,33 @@ prop_compose! {
     }
 }
 
+#[test]
+fn move_active_workspace_to_first_with_empty_workspace_above_first() {
+    let mut options = Options::default();
+    options.layout.empty_workspace_above_first = true;
+    let layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            Op::AddWindow {
+                params: TestWindowParams::new(1),
+            },
+            Op::FocusWorkspaceDown,
+            Op::AddWindow {
+                params: TestWindowParams::new(2),
+            },
+            Op::MoveWorkspaceToIndex {
+                ws_name: None,
+                target_idx: 0,
+            },
+        ],
+    );
+
+    let mon = layout.monitors().next().unwrap();
+    assert_eq!(mon.active_workspace_idx(), 1);
+    assert!(mon.active_workspace_ref().has_window(&2));
+}
+
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: if std::env::var_os("RUN_SLOW_TESTS").is_none() {

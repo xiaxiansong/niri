@@ -1386,3 +1386,24 @@ fn pinned_window_is_handed_over_to_overview() {
     assert!(mon.scratchpad_pin_geo().is_some());
     assert_close(visual_pos(&layout, 2), before, 3.);
 }
+
+#[test]
+fn shown_window_follows_after_moving_workspace_to_first() {
+    let mut options = Options::default();
+    options.layout.empty_workspace_above_first = true;
+    let layout = check_ops_with_options(
+        options,
+        [
+            window(5, 100),
+            Op::AddOutput(1),
+            hide(5),
+            toggle(),
+            Op::MoveWorkspaceToIndex {
+                ws_name: None,
+                target_idx: 0,
+            },
+        ],
+    );
+    assert_snapshot!(workspaces(&layout), @"output1: [] *[5] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [5], focus: Some(5)");
+}
