@@ -103,6 +103,7 @@
 | D13 | `scratchpad-show` 同时给 `--id` 和 `--app-id` | 视为错误，IPC 返回错误信息 |
 | D14 | `focus-window-previous` 是否会选中隐藏窗口 | 不会：候选中排除隐藏窗口（§4.8.1，M2b 后确认） |
 | D15 | `set-dynamic-cast-window --id` 指向隐藏窗口 | 在 niri 层拒绝，与 id 不存在时相同（静默无操作），与 D1 一致（§4.8.1，M2b 后确认） |
+| D16 | portal 窗口选择列表（gnome-shell introspect `GetWindows`）是否列出隐藏窗口 | 不列：在 niri 层排除，与 D1、D15 一致；想录制时先呈现（§4.8.1，M3 开始时确认） |
 
 ---
 
@@ -608,10 +609,11 @@ M2b 起 `Layout::windows()` 包含隐藏窗口（§4.5.7 A 类），niri 层少�
 |---|---|
 | `Action::FocusWindowPrevious`（约 906 行） | 候选迭代器加 `.filter(|win| win.scratchpad_state() != ScratchpadState::Hidden)`。否则刚隐藏的窗口焦点时间戳最新，会被选中并经 `activate_window` 呈现（D14） |
 | `Action::SetDynamicCastWindowById`（约 2273 行） | `any(..)` 条件加上“不是 Hidden”；隐藏窗口与 id 不存在时相同，静默无操作（D15）。`SetDynamicCastWindow`（无 id）作用于聚焦窗口，不可能是隐藏窗口，无需处理 |
+| `src/niri.rs` `State::on_introspect_msg()`（约 2287 行，不在 `do_action()` 中） | `with_windows()` 闭包内跳过 Hidden 窗口（D16） |
 
 不改的（已核对）：`close-window --id` 对隐藏窗口有效（§4.2）；`screenshot-window --id` 要求有 monitor，对隐藏窗口自然无操作；其余 `--id` 动作交给 Layout 的 C 类检查；MRU 与 a11y 的按 id 查找只用于读取。
 
-**待定（M3 开始时决定）**：portal 窗口选择列表来自 `with_windows()`（`niri.rs` 约 2308 行，gnome-shell introspect 的 `GetWindows`），M2b 后会列出隐藏窗口，选中后会对隐藏窗口开始窗口录屏，与 D1 的意图不一致。可选：列表中排除隐藏窗口；或保留（录屏画面在隐藏期间不更新）。
+**portal 窗口选择列表（D16，M3 开始时确认）**：列表来自 `with_windows()`（`niri.rs` 约 2308 行，gnome-shell introspect 的 `GetWindows`），M2b 后会列出隐藏窗口。核对源码：选中隐藏窗口时 `cast_params_for_window()` 经 `windows()` 能找到它，`refresh_mapped_cast_outputs()` 也保留其上次的输出，所以录屏能启动、但隐藏期间画面不更新，与 D1 的意图不一致。决定：列表中排除隐藏窗口。列表获取之后才隐藏的窗口由 D1 的停止录屏处理。
 
 ### 4.9 IPC
 
