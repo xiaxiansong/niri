@@ -43,7 +43,6 @@ fn state(layout: &Layout<TestWindow>, id: usize) -> ScratchpadState {
     layout
         .windows()
         .map(|(_, win)| win)
-        .chain(layout.scratchpad_hidden_windows())
         .find(|win| win.0.id == id)
         .unwrap()
         .scratchpad_state()
@@ -182,7 +181,9 @@ fn generic_toggle_cycles_through_queue() {
         check_ops_on_layout(&mut layout, [toggle()]);
         let ids: Vec<_> = layout
             .windows()
-            .map(|(_, win)| win.0.id.to_string())
+            .map(|(_, win)| win)
+            .filter(|win| win.scratchpad_state() == ScratchpadState::Shown)
+            .map(|win| win.0.id.to_string())
             .collect();
         shown.push(if ids.is_empty() {
             String::from("-")

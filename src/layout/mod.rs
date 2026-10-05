@@ -1518,6 +1518,13 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        if let Some(window) = self
+            .scratchpad_hidden_windows()
+            .find(|win| win.is_wl_surface(wl_surface))
+        {
+            return Some((window, None));
+        }
+
         None
     }
 
@@ -1547,6 +1554,12 @@ impl<W: LayoutElement> Layout<W> {
                         return Some((window, None));
                     }
                 }
+            }
+        }
+
+        for tile in &mut self.scratchpad.hidden {
+            if tile.window().is_wl_surface(wl_surface) {
+                return Some((tile.window_mut(), None));
             }
         }
 
@@ -1833,6 +1846,11 @@ impl<W: LayoutElement> Layout<W> {
                 }
             }
         }
+
+        for tile in &self.scratchpad.hidden {
+            // Hidden windows aren't on any output or workspace.
+            f(tile.window(), None, None, tile.ipc_layout_template());
+        }
     }
 
     pub fn with_windows_mut(&mut self, mut f: impl FnMut(&mut W, Option<&Output>)) {
@@ -1857,6 +1875,10 @@ impl<W: LayoutElement> Layout<W> {
                     }
                 }
             }
+        }
+
+        for tile in &mut self.scratchpad.hidden {
+            f(tile.window_mut(), None);
         }
     }
 
@@ -2536,6 +2558,10 @@ impl<W: LayoutElement> Layout<W> {
                     assert!(
                         self.has_window(window_id),
                         "interactive move must be on an existing window"
+                    );
+                    assert!(
+                        !self.is_scratchpad_hidden(window_id),
+                        "interactive move cannot be on a hidden scratchpad window"
                     );
                     move_win_id = Some(window_id.clone());
                 }
@@ -5589,7 +5615,9 @@ impl<W: LayoutElement> Layout<W> {
             .workspaces()
             .flat_map(|(mon, _, ws)| ws.windows().map(move |win| (mon, win)));
 
-        moving_window.chain(rest)
+        let hidden = self.scratchpad_hidden_windows().map(|win| (None, win));
+
+        moving_window.chain(rest).chain(hidden)
     }
 
     pub fn has_window(&self, window: &W::Id) -> bool {
