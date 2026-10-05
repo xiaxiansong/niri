@@ -586,7 +586,7 @@ impl<W: LayoutElement> Monitor<W> {
         is_floating: bool,
         anim: Option<niri_config::Animation>,
     ) {
-        let (mut workspace_idx, target) = self.resolve_add_window_target(target);
+        let (workspace_idx, target) = self.resolve_add_window_target(target);
 
         let workspace = &mut self.workspaces[workspace_idx];
 
@@ -605,19 +605,28 @@ impl<W: LayoutElement> Monitor<W> {
             workspace.original_outputs = vec![OutputId::new(&self.output)];
         }
 
-        if workspace_idx == self.workspaces.len() - 1 {
-            // Insert a new empty workspace.
-            self.add_workspace_bottom();
-        }
-
-        if self.options.layout.empty_workspace_above_first && workspace_idx == 0 {
-            self.add_workspace_top();
-            workspace_idx += 1;
-        }
+        let workspace_idx = self.ensure_empty_workspaces_after_add(workspace_idx);
 
         if allow_to_activate_workspace && activate.map_smart(|| false) {
             self.activate_workspace(workspace_idx);
         }
+    }
+
+    /// Adds empty workspaces around the workspace at `idx` that just got a window, if needed.
+    ///
+    /// Returns the new index of that workspace.
+    pub(super) fn ensure_empty_workspaces_after_add(&mut self, mut idx: usize) -> usize {
+        if idx == self.workspaces.len() - 1 {
+            // Insert a new empty workspace.
+            self.add_workspace_bottom();
+        }
+
+        if self.options.layout.empty_workspace_above_first && idx == 0 {
+            self.add_workspace_top();
+            idx += 1;
+        }
+
+        idx
     }
 
     pub fn add_tile_to_column(
