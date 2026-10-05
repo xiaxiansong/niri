@@ -834,29 +834,33 @@ impl<W: LayoutElement> Workspace<W> {
 
     /// Takes all shown scratchpad tiles out of the floating layout, from top to bottom.
     ///
-    /// Returns each tile along with whether it was the focused window of this workspace.
-    ///
     /// Unlike [`Workspace::remove_tile()`], this doesn't make the windows leave the output, since
     /// they are expected to move to another workspace on the same output.
-    pub fn take_shown_scratchpad_tiles(&mut self) -> Vec<(Tile<W>, bool)> {
-        let ids: Vec<_> = self
+    pub fn take_shown_scratchpad_tiles(&mut self) -> Vec<TakenScratchpadTile<W>> {
+        let taken: Vec<_> = self
             .floating
-            .tiles()
-            .filter(|tile| tile.in_scratchpad)
-            .map(|tile| tile.window().id().clone())
+            .tiles_with_offsets()
+            .filter(|(tile, _)| tile.in_scratchpad)
+            .map(|(tile, pos)| (tile.window().id().clone(), pos))
             .collect();
-        if ids.is_empty() {
+        if taken.is_empty() {
             return Vec::new();
         }
 
         let focused = self.active_window().map(|win| win.id().clone());
+        let working_area = self.working_area;
 
-        let tiles = ids
+        let tiles = taken
             .into_iter()
-            .map(|id| {
+            .map(|(id, pos)| {
                 let was_focused = focused.as_ref() == Some(&id);
                 let removed = self.floating.remove_tile(&id);
-                (removed.tile, was_focused)
+                TakenScratchpadTile {
+                    tile: removed.tile,
+                    was_focused,
+                    pos,
+                    working_area,
+                }
             })
             .collect();
 
@@ -2247,6 +2251,17 @@ fn compute_workspace_shadow_config(
     config.offset.y.0 *= norm;
 
     config
+}
+
+/// A shown scratchpad tile taken out of a workspace, to be added to another one on the same output.
+pub struct TakenScratchpadTile<W: LayoutElement> {
+    pub tile: Tile<W>,
+    /// Whether it was the focused window of its workspace.
+    pub was_focused: bool,
+    /// Its position in the workspace it was taken from.
+    pub pos: Point<f64, Logical>,
+    /// Working area of the workspace it was taken from.
+    pub working_area: Rectangle<f64, Logical>,
 }
 
 /// Returns the resize edges for a point within the tile, or `None` if the point doesn't hit it.

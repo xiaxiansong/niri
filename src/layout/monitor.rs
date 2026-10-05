@@ -14,8 +14,8 @@ use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
 use super::scrolling::{Column, ColumnWidth};
 use super::tile::Tile;
 use super::workspace::{
-    compute_working_area, resize_edges_for_tile, OutputId, Workspace, WorkspaceAddWindowTarget,
-    WorkspaceId, WorkspaceRenderElement,
+    compute_working_area, resize_edges_for_tile, OutputId, TakenScratchpadTile, Workspace,
+    WorkspaceAddWindowTarget, WorkspaceId, WorkspaceRenderElement,
 };
 use super::{compute_overview_zoom, ActivateWindow, HitType, LayoutElement, Options};
 use crate::animation::{Animation, Clock};
@@ -649,14 +649,29 @@ impl<W: LayoutElement> Monitor<W> {
                 tiles.extend(ws.take_shown_scratchpad_tiles());
             }
         }
+
+        self.add_shown_scratchpad_tiles(tiles);
+    }
+
+    /// Adds shown scratchpad tiles taken from workspaces on this output to the active workspace.
+    pub(super) fn add_shown_scratchpad_tiles(&mut self, tiles: Vec<TakenScratchpadTile<W>>) {
         if tiles.is_empty() {
             return;
         }
 
+        let active_idx = self.active_workspace_idx;
+
         // Floating tiles are added on top, so add them from bottom to top to keep the order.
         let ws = &mut self.workspaces[active_idx];
-        for (tile, was_focused) in tiles.into_iter().rev() {
-            ws.add_scratchpad_tile(tile, was_focused, false);
+        for taken in tiles.into_iter().rev() {
+            let mut tile = taken.tile;
+
+            // Keep the window in place on the screen when the working area is different.
+            if taken.working_area != ws.working_area() {
+                tile.floating_pos = Some(ws.floating_logical_to_size_frac(taken.pos));
+            }
+
+            ws.add_scratchpad_tile(tile, taken.was_focused, false);
         }
 
         self.ensure_empty_workspaces_after_add(active_idx);
