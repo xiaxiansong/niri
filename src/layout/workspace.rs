@@ -1136,7 +1136,12 @@ impl<W: LayoutElement> Workspace<W> {
         }) {
             return;
         }
+
+        let column_count = self.scrolling.columns().count();
         self.scrolling.consume_or_expel_window_left(window);
+        if self.scrolling.columns().count() < column_count {
+            self.scrolling.fill_view_after_removal();
+        }
     }
 
     pub fn consume_or_expel_window_right(&mut self, window: Option<&W::Id>) {
@@ -1145,14 +1150,24 @@ impl<W: LayoutElement> Workspace<W> {
         }) {
             return;
         }
+
+        let column_count = self.scrolling.columns().count();
         self.scrolling.consume_or_expel_window_right(window);
+        if self.scrolling.columns().count() < column_count {
+            self.scrolling.fill_view_after_removal();
+        }
     }
 
     pub fn consume_into_column(&mut self) {
         if self.floating_is_active.get() {
             return;
         }
+
+        let column_count = self.scrolling.columns().count();
         self.scrolling.consume_into_column();
+        if self.scrolling.columns().count() < column_count {
+            self.scrolling.fill_view_after_removal();
+        }
     }
 
     pub fn expel_from_column(&mut self) {
