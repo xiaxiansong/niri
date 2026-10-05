@@ -725,6 +725,15 @@ fn print_window(window: &Window) {
         if window.is_floating { "yes" } else { "no" }
     );
 
+    let scratchpad = if window.is_scratchpad_hidden {
+        "hidden"
+    } else if window.is_in_scratchpad {
+        "shown"
+    } else {
+        "no"
+    };
+    println!("  Scratchpad: {scratchpad}");
+
     if let Some(pid) = window.pid {
         println!("  PID: {pid}");
     } else {

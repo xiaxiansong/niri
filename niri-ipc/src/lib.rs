@@ -1358,6 +1358,15 @@ pub struct Window {
     pub is_floating: bool,
     /// Whether this window requests your attention.
     pub is_urgent: bool,
+    /// Whether this window is in the scratchpad (hidden or shown).
+    #[serde(default)]
+    pub is_in_scratchpad: bool,
+    /// Whether this window is hidden in the scratchpad.
+    ///
+    /// Hidden windows have no workspace. Note that a window being moved with the mouse also has
+    /// no workspace, so check this field rather than `workspace_id`.
+    #[serde(default)]
+    pub is_scratchpad_hidden: bool,
     /// Position- and size-related properties of the window.
     pub layout: WindowLayout,
     /// Timestamp when the window was most recently focused.
