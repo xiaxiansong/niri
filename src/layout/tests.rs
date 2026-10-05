@@ -16,6 +16,7 @@ use super::*;
 mod animations;
 mod fill_view;
 mod fullscreen;
+mod scratchpad;
 
 impl<W: LayoutElement> Default for Layout<W> {
     fn default() -> Self {
@@ -644,6 +645,20 @@ enum Op {
         #[proptest(strategy = "arbitrary_position_change()")]
         y: PositionChange,
         animate: bool,
+    },
+    // FIXME: generate these once the rest of the layout handles hidden scratchpad windows.
+    #[proptest(skip)]
+    MoveWindowToScratchpad {
+        id: Option<usize>,
+    },
+    /// Toggles the scratchpad windows with this id, or all of them if `None`.
+    #[proptest(skip)]
+    ToggleScratchpad {
+        id: Option<usize>,
+    },
+    #[proptest(skip)]
+    RemoveWindowFromScratchpad {
+        id: Option<usize>,
     },
     SetParent {
         #[proptest(strategy = "1..=5usize")]
@@ -1382,6 +1397,15 @@ impl Op {
                 let id = id.filter(|id| layout.has_window(id));
                 layout.move_floating_window(id.as_ref(), x, y, animate);
             }
+            Op::MoveWindowToScratchpad { id } => {
+                layout.move_to_scratchpad(id.as_ref());
+            }
+            Op::ToggleScratchpad { id } => {
+                layout.toggle_scratchpad(|win| id.is_none_or(|id| win.0.id == id));
+            }
+            Op::RemoveWindowFromScratchpad { id } => {
+                layout.remove_from_scratchpad(id.as_ref());
+            }
             Op::SetParent {
                 id,
                 mut new_parent_id,
@@ -1461,6 +1485,18 @@ impl Op {
                         }
                         return;
                     }
+                }
+
+                let hidden = layout
+                    .scratchpad_hidden_windows()
+                    .find(|win| win.0.id == id)
+                    .map(|win| win.communicate());
+                if let Some(changed) = hidden {
+                    if changed {
+                        // FIXME: serial.
+                        layout.update_window(&id, None);
+                    }
+                    return;
                 }
 
                 match &mut layout.monitor_set {
