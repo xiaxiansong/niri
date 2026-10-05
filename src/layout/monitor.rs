@@ -1470,6 +1470,9 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspace_switch = None;
 
         self.clean_up_workspaces();
+
+        // The active workspace is not supposed to change here, but follow just in case.
+        self.scratchpad_follow();
     }
 
     /// Returns the geometry of the active window relative to and clamped to the output.
