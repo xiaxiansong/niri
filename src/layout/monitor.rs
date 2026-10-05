@@ -1528,6 +1528,8 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub(super) fn set_overview_progress(&mut self, progress: Option<&super::OverviewProgress>) {
         let prev_render_idx = self.workspace_render_idx();
+        let prev_pin_geo = self.scratchpad_pin_geo();
+        let prev_active_geo = self.active_workspace_render_geo();
         self.overview_progress = progress.map(OverviewProgress::from);
         let new_render_idx = self.workspace_render_idx();
 
@@ -1540,6 +1542,32 @@ impl<W: LayoutElement> Monitor<W> {
                 *anim = anim.restarted(prev_render_idx, anim.to(), 0.);
             }
         }
+
+        // If the shown scratchpad windows got pinned or unpinned in the middle of a workspace
+        // switch, animate them from where they were. The overview zoom is 1 at this point.
+        let from = match (prev_pin_geo, self.scratchpad_pin_geo()) {
+            (Some(pin_geo), None) => pin_geo.loc - self.active_workspace_render_geo().loc,
+            (None, Some(pin_geo)) => prev_active_geo.loc - pin_geo.loc,
+            _ => return,
+        };
+        if from == Point::default() {
+            return;
+        }
+
+        let config = self.options.animations.workspace_switch.0;
+        let ws = &mut self.workspaces[self.active_workspace_idx];
+        for (tile, _) in ws.tiles_with_render_positions_mut(false) {
+            if tile.in_scratchpad {
+                tile.animate_move_from_with_config(from, config);
+                tile.set_anim_y_between_workspaces();
+            }
+        }
+    }
+
+    fn active_workspace_render_geo(&self) -> Rectangle<f64, Logical> {
+        self.workspaces_render_geo()
+            .nth(self.active_workspace_idx)
+            .unwrap()
     }
 
     #[cfg(test)]
