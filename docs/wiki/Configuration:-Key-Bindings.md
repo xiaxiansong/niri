@@ -363,6 +363,69 @@ binds {
 }
 ```
 
+#### `move-window-to-scratchpad`, `scratchpad-show`, `remove-window-from-scratchpad`
+
+<sup>Since: next release</sup>
+
+The scratchpad lets you hide windows and bring them back with a key press, for example a drop-down terminal or a music player.
+
+A window in the scratchpad is either hidden or shown.
+Hidden windows are not on any workspace and are not drawn.
+Shown windows are regular floating windows on the workspace where they were shown.
+
+- `move-window-to-scratchpad` hides the focused window.
+A tiled window becomes floating.
+The first time a tiled window is hidden, its floating size comes from the `default-column-width` and `default-window-height` [window rules](./Configuration:-Window-Rules.md), or 60% of the working area if they are unset.
+This action does nothing if the window has open dialogs or other child windows.
+- `scratchpad-show` does the first of the following that applies:
+  1. If the focused window is a shown scratchpad window, hide it.
+  2. If there are shown scratchpad windows on the focused workspace, focus the one that was shown most recently.
+  3. If there are shown scratchpad windows elsewhere, move the one that was shown most recently to the focused workspace and focus it.
+     If that window has open child windows, focus it where it is instead.
+  4. If there are hidden windows, show the one that has been hidden the longest and focus it.
+- `remove-window-from-scratchpad` takes the focused window out of the scratchpad.
+It stays where it is as a regular floating window.
+
+With the `app-id` property, `scratchpad-show` only considers scratchpad windows whose app ID matches the regular expression, in the same way as in window rules.
+
+Some consequences of these rules:
+
+- If you only use plain `scratchpad-show` and all scratchpad windows start hidden, it shows one window at a time and cycles through them in order: a hidden window goes to the end of the queue, and showing takes the window from the front.
+- If a scratchpad window is already shown (for example, by an `app-id` bind), plain `scratchpad-show` focuses it rather than showing another hidden window.
+So, there can be several scratchpad windows shown at the same time.
+- An `app-id` bind only picks among the matching windows and doesn't change the order of the other windows in the queue.
+
+A window leaves the scratchpad when it is moved to the tiling layout (including through fullscreen or maximize), moved to another workspace or monitor, or closed.
+When you drag a shown window with the mouse, it stays in the scratchpad if you drop it onto the floating layout of a monitor's active workspace.
+If an application unmaps its window (for example, minimizes it to the tray) and maps it again later, it comes back as a regular window.
+
+Activating a hidden window shows it: for example, clicking it in a taskbar, `focus-window --id`, or an application asking for focus (subject to the `on-xdg-activate` setting).
+When a hidden window opens a dialog, the window is shown first, and the dialog opens next to it.
+
+While a window is hidden, niri stops screencasts of that window and leaves it out of the recent windows switcher, `focus-window-previous`, and the screencast window picker.
+A hidden window still receives occasional frame callbacks (about once a second) like windows on inactive workspaces, so applications may keep running in the background.
+
+It's a good idea to turn off key repeat for these binds, so that holding the key doesn't make the window flicker.
+
+```kdl
+binds {
+    Mod+Shift+Minus repeat=false { move-window-to-scratchpad; }
+    Mod+Minus       repeat=false { scratchpad-show; }
+    Mod+Grave       repeat=false { scratchpad-show app-id="^dropdown$"; }
+    Mod+M           repeat=false { scratchpad-show app-id="^(Spotify|spotify)$"; }
+}
+
+window-rule {
+    match app-id="^dropdown$"
+    open-floating true
+    default-column-width { proportion 0.8; }
+    default-window-height { proportion 0.5; }
+    default-floating-position x=0 y=0 relative-to="top"
+}
+```
+
+See the [IPC page](./IPC.md#scratchpad) for using the scratchpad from scripts.
+
 #### `screenshot`, `screenshot-screen`, `screenshot-window`
 
 Actions for taking screenshots.

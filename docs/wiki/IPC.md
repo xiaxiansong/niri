@@ -65,6 +65,46 @@ $ echo '{"Action":{"FocusWorkspace":{"reference":{"Id":8}}}}' | niri msg raw-req
 
 You can find all available requests and response types in the [niri-ipc sub-crate documentation](https://niri-wm.github.io/niri/niri_ipc/).
 
+### Scratchpad
+
+<sup>Since: next release</sup>
+
+The [scratchpad actions](./Configuration:-Key-Bindings.md#move-window-to-scratchpad-scratchpad-show-remove-window-from-scratchpad) accept a window `--id`, and `scratchpad-show` also accepts an `--app-id` regular expression (but not both at once):
+
+```sh
+niri msg action move-window-to-scratchpad --id 42
+niri msg action scratchpad-show --app-id '^dropdown$'
+```
+
+Windows have two fields for the scratchpad state:
+
+- `is_in_scratchpad`: the window is in the scratchpad, either hidden or shown.
+- `is_scratchpad_hidden`: the window is hidden in the scratchpad.
+
+Hidden windows have no `workspace_id`.
+A window that is being dragged with the mouse has no `workspace_id` either, so check `is_scratchpad_hidden` rather than `workspace_id` to tell whether a window is hidden.
+
+```sh
+niri msg --json windows | jq '.[] | select(.is_in_scratchpad)'
+```
+
+`scratchpad-show` only acts on windows that are already in the scratchpad.
+For example, a drop-down terminal script needs to handle three cases: the terminal isn't running, it's running but not in the scratchpad, or it's in the scratchpad:
+
+```bash
+#!/usr/bin/env bash
+w=$(niri msg --json windows | jq -c '[.[] | select(.app_id == "dropdown")][0] // empty')
+if [ -z "$w" ]; then
+    niri msg action spawn -- foot --app-id dropdown
+elif [ "$(jq -r .is_in_scratchpad <<<"$w")" = true ]; then
+    niri msg action scratchpad-show --id "$(jq -r .id <<<"$w")"
+else
+    niri msg action move-window-to-scratchpad --id "$(jq -r .id <<<"$w")"
+fi
+```
+
+Note that pressing this quickly several times in a row may start more than one terminal.
+
 ### Backwards Compatibility
 
 The JSON output *should* remain stable, as in:
