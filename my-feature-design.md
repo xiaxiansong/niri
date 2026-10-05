@@ -101,6 +101,8 @@
 | D11 | 取消映射后再映射 | 取消映射即退出暂存区；再映射按普通新窗口处理（v1） |
 | D12 | 首次暂存尺寸 | 历史浮动尺寸 → 窗口规则 `default-column-width/default-window-height` → 工作区 60%×60%（§4.5.1） |
 | D13 | `scratchpad-show` 同时给 `--id` 和 `--app-id` | 视为错误，IPC 返回错误信息 |
+| D14 | `focus-window-previous` 是否会选中隐藏窗口 | 不会：候选中排除隐藏窗口（§4.8.1，M2b 后确认） |
+| D15 | `set-dynamic-cast-window --id` 指向隐藏窗口 | 在 niri 层拒绝，与 id 不存在时相同（静默无操作），与 D1 一致（§4.8.1，M2b 后确认） |
 
 ---
 
@@ -518,6 +520,7 @@ pub fn scratchpad_hidden_windows(&self) -> impl Iterator<Item = &W>;
 | C' 状态请求 | `set_fullscreen()`、`toggle_fullscreen()`、`toggle_windowed_fullscreen()`、`set_maximized()`、`toggle_maximized()` | 隐藏中忽略 |
 | C'' 移走 | `move_to_workspace()`、`move_to_output()`、`move_column_to_*`（按 id 的变体） | 隐藏中直接返回 |
 | C''' 激活 | `activate_window()` / `activate_window_without_raising()` | §4.5.3 |
+| C 自然满足（不加代码） | `interactive_move_update()`、`interactive_move_end()`（只在 Starting/Moving 的 id 匹配时动作，而 Starting/Moving 不可能是隐藏窗口，`verify_invariants` 断言）、`interactive_resize_update()`（遍历工作区，返回 false）、`start_open_animation_for_window()`（遍历工作区，无操作） | 对隐藏窗口自然无操作，不加冗余检查（同 §4.5.4）；M2b 审计时补入本表 |
 | D 生命周期 | §4.5.4、§4.5.6 | |
 | E 新窗口 | `add_window()` 的 `NextTo` | §4.6 |
 
@@ -596,6 +599,19 @@ pub fn scratchpad_follow(&mut self) {
 **帧回调说明（D6 的正确理由）**：隐藏窗口仍在 `with_windows_mut` 中，因此会收到 1 秒兜底定时器的节流回调（与非活动工作区窗口相同），客户端保持活性。逐输出的高频回调会因缓存被清而停止。**不承诺**程序后台的计算、音频、定时器会停止。
 
 **呈现后**：不需要额外副作用；`queue_redraw_all()` 即可。
+
+#### 4.8.1 niri 层排除隐藏窗口（D14、D15）
+
+M2b 起 `Layout::windows()` 包含隐藏窗口（§4.5.7 A 类），niri 层少数按 `windows()` 选窗口的动作需要显式排除。判断用 `mapped.scratchpad_state() == ScratchpadState::Hidden`（需 `use crate::layout::LayoutElement`）。
+
+| 位置（`src/input/mod.rs` `do_action()`） | 处理 |
+|---|---|
+| `Action::FocusWindowPrevious`（约 906 行） | 候选迭代器加 `.filter(|win| win.scratchpad_state() != ScratchpadState::Hidden)`。否则刚隐藏的窗口焦点时间戳最新，会被选中并经 `activate_window` 呈现（D14） |
+| `Action::SetDynamicCastWindowById`（约 2273 行） | `any(..)` 条件加上“不是 Hidden”；隐藏窗口与 id 不存在时相同，静默无操作（D15）。`SetDynamicCastWindow`（无 id）作用于聚焦窗口，不可能是隐藏窗口，无需处理 |
+
+不改的（已核对）：`close-window --id` 对隐藏窗口有效（§4.2）；`screenshot-window --id` 要求有 monitor，对隐藏窗口自然无操作；其余 `--id` 动作交给 Layout 的 C 类检查；MRU 与 a11y 的按 id 查找只用于读取。
+
+**待定（M3 开始时决定）**：portal 窗口选择列表来自 `with_windows()`（`niri.rs` 约 2308 行，gnome-shell introspect 的 `GetWindows`），M2b 后会列出隐藏窗口，选中后会对隐藏窗口开始窗口录屏，与 D1 的意图不一致。可选：列表中排除隐藏窗口；或保留（录屏画面在隐藏期间不更新）。
 
 ### 4.9 IPC
 
@@ -790,7 +806,7 @@ fi
 | M1b ✅ | F1-5 拖走、F1-6 合并 + 用例 10、17 | 与 M1a 一起换成日常使用版本 |
 | M2a | 暂存区 Layout 核心（上）：两步纯重构（§4.5.1 第 11 步清理辅助函数、§4.5.2 第 7 步 `ensure_empty_workspaces_after_add`）→ §4.5.0–§4.5.6（含 §4.3 五条规则、§4.5.1 第 4 步子窗口检查）→ 不变量 1–3、5–7 → §4.12 确定性用例 1–7、12、13、18–21。测试用的暂存区 Op 标 `#[proptest(skip)]`，不进随机生成 | 两步重构快照零变化；新用例全过并做反向验证；现有测试与快照不变 |
 | M2b | 暂存区 Layout 核心（下）：§4.5.7 审计、§4.6 子窗口、§4.12 proptest Op（去掉 skip，进入随机生成）、用例 15–17 | `random_operations_dont_panic` 多轮无 panic。M2（a/b）中显示中的窗口不跟随，停留在呈现时的工作区；**为保证不变量 4 不被违反，M2 暂不启用不变量 4** |
-| M3 | niri 集成：config 动作、IPC 动作/字段/变化检测/校验、`do_action`、§4.8 副作用与可见性、文档、客户端集成测试 | 可日常使用 |
+| M3 | niri 集成：config 动作、IPC 动作/字段/变化检测/校验、`do_action`、§4.8 副作用与可见性（含 §4.8.1 D14/D15）、文档、客户端集成测试 | 可日常使用 |
 | M4 | 跟随：§4.7 全部调用点 + 不变量 4 + 用例 8–11、14 | |
 | M5 | 视觉：钉住渲染、专门的收起/展开动画（§8） | |
 | M6 | 窗口规则 `open-in-scratchpad` / `is-in-scratchpad`；再映射时保留身份（可选） | |
@@ -834,13 +850,13 @@ M2b 补充说明：
 - 内部调用者的行为变化：`set_fullscreen()` 的 windowed fullscreen 分支和 `toggle_windowed_fullscreen()` 都经过 `with_windows_mut()`，A 类改动后会改到隐藏窗口，所以这两个方法的隐藏检查放在**函数最开头**（其余方法放在 interactive_move 检查之后）。`toggle_windowed_fullscreen()` 原本对隐藏 id 会在 `windows().find(..).unwrap()` 处 panic。
 - `verify_invariants()` 的 Starting 分支在 `has_window()` 之外加了“不是隐藏窗口”的断言（`has_window()` 现在包含隐藏窗口，原断言变弱；这也是不变量 5 的延伸）。
 - C 类中已自然满足、未加冗余检查（沿用 §4.5.4 的做法）：`scroll_amount_to_activate()`（遍历工作区，找不到返回 0）、`interactive_move_begin()`、`interactive_resize_begin()`、`interactive_resize_end()`。用例 17 逐个验证。
-- §4.5.7 表格未列出、带窗口 id 的方法：`interactive_move_update()`、`interactive_move_end()`（只在 Starting/Moving 状态 id 匹配时动作，而 Starting/Moving 不可能是隐藏窗口）、`interactive_resize_update()`（遍历工作区，返回 false）、`start_open_animation_for_window()`（遍历工作区，无操作）。均自然满足，未加代码；**待确认是否把它们补进表格**。
+- §4.5.7 表格未列出、带窗口 id 的方法：`interactive_move_update()`、`interactive_move_end()`（只在 Starting/Moving 状态 id 匹配时动作，而 Starting/Moving 不可能是隐藏窗口）、`interactive_resize_update()`（遍历工作区，返回 false）、`start_open_animation_for_window()`（遍历工作区，无操作）。均自然满足，未加代码；经用户确认已补进 §4.5.7 表格。
 - §4.6 第 3 条：`parent_changed` 经 `find_window_and_output_mut()` 找到隐藏父窗口后调用 `descendants_added()`，后者只遍历工作区，返回 false，无需代码。`bring_up_descendants_of()` 是有界循环，不受父链环影响。
 - 测试框架：`AddWindowNextTo`（查重与查找 next_to）、`AddWindowToNamedWorkspace`（查重）、`SetParent` 补了隐藏队列分支；`AddWindow`、`SetForcedSize` 经 `has_window()` / `windows()` 自然覆盖。此前 `AddWindow` 等可能添加与隐藏窗口重复的 id，只是暂存区 Op 未参与随机生成所以没暴露。exhaustive 的 `operations_dont_panic` 列表未加入暂存区 Op（文档未要求）。
 - 用例对照：15 `new_dialog_of_hidden_window_shows_it`（浮动/平铺对话框、`ActivateWindow::No`、无输出）；16 `hiding_with_visible_child_is_noop`（含规则 1 被拒返回 `Nothing`）；17 `operations_on_hidden_window_are_ignored`（隐藏窗口同时处于 windowed fullscreen，覆盖 `set_fullscreen(false)` 的特殊分支）。另加 `hidden_windows_are_found` 覆盖 A 类。`find_window_and_output(_mut)()` 无法用 `TestWindow` 测试（`is_wl_surface()` 恒为 false），留给 M3 的客户端集成测试。`SetParent` 作用于隐藏窗口只由随机测试覆盖。
 - 反向验证（逐个去掉后确认对应用例失败，再从 git 还原）：`windows()`、`with_windows()`、`with_windows_mut()` 中的隐藏 Tile；`toggle_window_height`、`move_to_output`、`popup_target_rect`、`set_fullscreen`、`toggle_windowed_fullscreen` 的检查；`add_window` 中呈现隐藏父窗口、无输出改为 Auto；测试框架 `AddWindowNextTo` 的隐藏查找。
 - 随机测试命中率（临时插桩，10000 cases）：成功隐藏约 200 次；各 C/C' 分支命中 1–8 次；NextTo 隐藏父窗口 4 次、无输出回退 1 次；`set_maximized`、`move_to_output` 的隐藏分支在该样本中未命中（用例 17 覆盖）。命中率低是因为 id 需要恰好对应已存在的窗口。未发现 panic。
-- M3 注意（niri 层因 A 类改动产生的行为变化，目前没有隐藏窗口所以不可观测）：`focus-window-previous` 按焦点时间戳从 `windows()` 中选取，会选中刚隐藏的窗口并经 `activate_window` 把它呈现出来；`set-dynamic-cast-window --id` 可以指向隐藏窗口；`screenshot-window --id` 需要 monitor，对隐藏窗口无操作；`close-window --id` 有效（符合 §4.2）。
+- M3 注意（niri 层因 A 类改动产生的行为变化，目前没有隐藏窗口所以不可观测）：`focus-window-previous` 按焦点时间戳从 `windows()` 中选取，会选中刚隐藏的窗口并经 `activate_window` 把它呈现出来；`set-dynamic-cast-window --id` 可以指向隐藏窗口；`screenshot-window --id` 需要 monitor，对隐藏窗口无操作；`close-window --id` 有效（符合 §4.2）。用户已确认：前两者在 niri 层排除隐藏窗口（D14、D15，§4.8.1），M3 实现。另发现 portal 窗口选择列表也会列出隐藏窗口，记为 §4.8.1 待定项。
 
 ---
 
