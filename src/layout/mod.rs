@@ -1585,6 +1585,10 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        if self.is_scratchpad_hidden(window) {
+            return Rectangle::default();
+        }
+
         self.workspaces()
             .find_map(|(_, _, ws)| ws.popup_target_rect(window))
             .unwrap()
@@ -1630,6 +1634,10 @@ impl<W: LayoutElement> Layout<W> {
             if move_.tile.window().id() == window {
                 return true;
             }
+        }
+
+        if self.is_scratchpad_hidden(window) {
+            return false;
         }
 
         let MonitorSet::Normal { monitors, .. } = &self.monitor_set else {
@@ -2042,6 +2050,10 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        if window.is_some_and(|window| self.is_scratchpad_hidden(window)) {
+            return;
+        }
+
         let workspace = if let Some(window) = window {
             Some(
                 self.workspaces_mut()
@@ -2063,6 +2075,10 @@ impl<W: LayoutElement> Layout<W> {
             if window.is_none() || window == Some(move_.tile.window().id()) {
                 return;
             }
+        }
+
+        if window.is_some_and(|window| self.is_scratchpad_hidden(window)) {
+            return;
         }
 
         let workspace = if let Some(window) = window {
@@ -2301,6 +2317,10 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        if window.is_some_and(|window| self.is_scratchpad_hidden(window)) {
+            return;
+        }
+
         let monitor = if let Some(window) = window {
             match &mut self.monitor_set {
                 MonitorSet::Normal { monitors, .. } => monitors
@@ -2423,6 +2443,10 @@ impl<W: LayoutElement> Layout<W> {
             if id.is_none() || id == Some(move_.tile.window().id()) {
                 return;
             }
+        }
+
+        if id.is_some_and(|id| self.is_scratchpad_hidden(id)) {
+            return;
         }
 
         let workspace = if let Some(id) = id {
@@ -3234,6 +3258,10 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        if window.is_some_and(|window| self.is_scratchpad_hidden(window)) {
+            return;
+        }
+
         let workspace = if let Some(window) = window {
             Some(
                 self.workspaces_mut()
@@ -3255,6 +3283,10 @@ impl<W: LayoutElement> Layout<W> {
             if window.is_none() || window == Some(move_.tile.window().id()) {
                 return;
             }
+        }
+
+        if window.is_some_and(|window| self.is_scratchpad_hidden(window)) {
+            return;
         }
 
         let workspace = if let Some(window) = window {
@@ -3294,6 +3326,10 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        if window.is_some_and(|window| self.is_scratchpad_hidden(window)) {
+            return;
+        }
+
         let workspace = if let Some(window) = window {
             Some(
                 self.workspaces_mut()
@@ -3317,6 +3353,10 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        if window.is_some_and(|window| self.is_scratchpad_hidden(window)) {
+            return;
+        }
+
         let workspace = if let Some(window) = window {
             Some(
                 self.workspaces_mut()
@@ -3338,6 +3378,10 @@ impl<W: LayoutElement> Layout<W> {
             if window.is_none() || window == Some(move_.tile.window().id()) {
                 return;
             }
+        }
+
+        if window.is_some_and(|window| self.is_scratchpad_hidden(window)) {
+            return;
         }
 
         let workspace = if let Some(window) = window {
@@ -3410,6 +3454,10 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        if window.is_some_and(|window| self.is_scratchpad_hidden(window)) {
+            return;
+        }
+
         let workspace = if let Some(window) = window {
             Some(
                 self.workspaces_mut()
@@ -3434,6 +3482,10 @@ impl<W: LayoutElement> Layout<W> {
                 }
                 return;
             }
+        }
+
+        if window.is_some_and(|window| self.is_scratchpad_hidden(window)) {
+            return;
         }
 
         let workspace = if let Some(window) = window {
@@ -3831,6 +3883,10 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        if id.is_some_and(|id| self.is_scratchpad_hidden(id)) {
+            return;
+        }
+
         let workspace = if let Some(id) = id {
             Some(self.workspaces_mut().find(|ws| ws.has_window(id)).unwrap())
         } else {
@@ -3870,6 +3926,10 @@ impl<W: LayoutElement> Layout<W> {
             if window.is_none() || window == Some(move_.tile.window().id()) {
                 return;
             }
+        }
+
+        if window.is_some_and(|window| self.is_scratchpad_hidden(window)) {
+            return;
         }
 
         if let MonitorSet::Normal {
@@ -4078,6 +4138,10 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn set_fullscreen(&mut self, id: &W::Id, is_fullscreen: bool) {
+        if self.is_scratchpad_hidden(id) {
+            return;
+        }
+
         // Check if this is a request to unset the windowed fullscreen state.
         if !is_fullscreen {
             let mut handled = false;
@@ -4113,6 +4177,10 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        if self.is_scratchpad_hidden(id) {
+            return;
+        }
+
         for ws in self.workspaces_mut() {
             if ws.has_window(id) {
                 ws.toggle_fullscreen(id);
@@ -4122,6 +4190,10 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     pub fn toggle_windowed_fullscreen(&mut self, id: &W::Id) {
+        if self.is_scratchpad_hidden(id) {
+            return;
+        }
+
         let (_, window) = self.windows().find(|(_, win)| win.id() == id).unwrap();
         if window.pending_sizing_mode().is_fullscreen() {
             // Remove the real fullscreen.
@@ -4148,6 +4220,10 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        if self.is_scratchpad_hidden(id) {
+            return;
+        }
+
         for ws in self.workspaces_mut() {
             if ws.has_window(id) {
                 ws.set_maximized(id, maximize);
@@ -4161,6 +4237,10 @@ impl<W: LayoutElement> Layout<W> {
             if move_.tile.window().id() == id {
                 return;
             }
+        }
+
+        if self.is_scratchpad_hidden(id) {
+            return;
         }
 
         for ws in self.workspaces_mut() {
