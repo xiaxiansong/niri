@@ -722,3 +722,269 @@ fn operations_on_hidden_window_are_ignored() {
     layout.verify_invariants();
     assert_eq!(full_state(&layout), expected);
 }
+
+/// Window ids on each workspace of each output, with `*` marking the active workspace.
+fn workspaces(layout: &Layout<TestWindow>) -> String {
+    let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
+        return String::from("no outputs");
+    };
+    let mons: Vec<_> = monitors
+        .iter()
+        .map(|mon| {
+            let wss: Vec<_> = mon
+                .workspaces
+                .iter()
+                .enumerate()
+                .map(|(idx, ws)| {
+                    let mark = if idx == mon.active_workspace_idx {
+                        "*"
+                    } else {
+                        ""
+                    };
+                    let ids: Vec<_> = ws.windows().map(|win| win.0.id).collect();
+                    format!("{mark}{ids:?}")
+                })
+                .collect();
+            format!("{}: {}", mon.output_name(), wss.join(" "))
+        })
+        .collect();
+    mons.join("; ")
+}
+
+/// Index of the previous workspace on the active output.
+fn previous_workspace_idx(layout: &Layout<TestWindow>) -> Option<usize> {
+    let mon = layout.active_monitor_ref().unwrap();
+    mon.idx_of_ws(mon.previous_workspace_id?)
+}
+
+/// Floating window ids on the active workspace, from top to bottom.
+fn floating_order(layout: &Layout<TestWindow>) -> String {
+    let ws = layout.active_workspace().unwrap();
+    let ids: Vec<_> = ws
+        .floating()
+        .tiles()
+        .map(|tile| tile.window().0.id)
+        .collect();
+    format!("{ids:?}")
+}
+
+#[test]
+fn shown_window_follows_workspace_switch() {
+    let setup = [
+        Op::AddOutput(1),
+        window(1, 100),
+        floating_window(2),
+        hide(2),
+        toggle(),
+    ];
+
+    // Keyboard. This takes effect right away, without a refresh.
+    let mut ops = setup.to_vec();
+    ops.push(Op::FocusWorkspaceDown);
+    let mut layout = check_ops(ops);
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[2] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
+
+    // Following back empties the workspace, which gets cleaned up after the switch animation.
+    check_ops_on_layout(&mut layout, [Op::FocusWorkspaceUp]);
+    assert_snapshot!(workspaces(&layout), @"output1: *[1, 2] [] []");
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_snapshot!(workspaces(&layout), @"output1: *[1, 2] []");
+
+    // Gesture. The window stays on the old workspace until the gesture ends.
+    let mut ops = setup.to_vec();
+    ops.extend([
+        Op::WorkspaceSwitchGestureBegin {
+            output_idx: 1,
+            is_touchpad: true,
+        },
+        Op::WorkspaceSwitchGestureUpdate {
+            delta: 300.,
+            timestamp: Duration::ZERO,
+            is_touchpad: true,
+        },
+    ]);
+    let mut layout = check_ops(ops);
+    assert_snapshot!(workspaces(&layout), @"output1: *[1, 2] []");
+    check_ops_on_layout(
+        &mut layout,
+        [Op::WorkspaceSwitchGestureEnd {
+            is_touchpad: Some(true),
+        }],
+    );
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[2] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
+
+    // Activating a workspace by adding a window to it.
+    let mut ops = setup.to_vec();
+    ops.extend([window(3, 100), Op::MoveWindowToWorkspaceDown(true)]);
+    let layout = check_ops(ops);
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[3, 2] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(3)");
+}
+
+#[test]
+fn follow_adds_empty_workspaces() {
+    // Following to the last empty workspace adds a new one.
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1, 100),
+        floating_window(2),
+        hide(2),
+        toggle(),
+        Op::FocusWorkspaceDown,
+    ]);
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[2] []");
+    assert_eq!(previous_workspace_idx(&layout), Some(0));
+    check_ops_on_layout(&mut layout, [Op::FocusWorkspacePrevious]);
+    assert_snapshot!(workspaces(&layout), @"output1: *[1, 2] [] []");
+
+    // Following to the first empty workspace adds a new one above it.
+    let mut options = Options::default();
+    options.layout.empty_workspace_above_first = true;
+    let layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            window(1, 100),
+            floating_window(2),
+            hide(2),
+            toggle(),
+            Op::FocusWorkspaceUp,
+        ],
+    );
+    assert_snapshot!(workspaces(&layout), @"output1: [] *[2] [1] []");
+    assert_eq!(previous_workspace_idx(&layout), Some(2));
+}
+
+#[test]
+fn unfocused_shown_window_follows_without_focus() {
+    // Tiled window focused on the target workspace.
+    let layout = check_ops([
+        Op::AddOutput(1),
+        window(1, 100),
+        Op::FocusWorkspaceDown,
+        window(3, 100),
+        Op::FocusWorkspaceUp,
+        floating_window(2),
+        hide(2),
+        toggle(),
+        Op::FocusTiling,
+        Op::FocusWorkspaceDown,
+    ]);
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[3, 2] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(3)");
+
+    // Floating window focused on the target workspace.
+    let layout = check_ops([
+        Op::AddOutput(1),
+        window(1, 100),
+        Op::FocusWorkspaceDown,
+        floating_window(3),
+        Op::FocusWorkspaceUp,
+        floating_window(2),
+        hide(2),
+        toggle(),
+        Op::FocusTiling,
+        Op::FocusWorkspaceDown,
+    ]);
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[2, 3] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(3)");
+}
+
+#[test]
+fn follow_keeps_stacking_order() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1, 100),
+        floating_window(2),
+        floating_window(3),
+        floating_window(4),
+        hide(2),
+        hide(3),
+        hide(4),
+        Op::ToggleScratchpad { id: Some(2) },
+        Op::ToggleScratchpad { id: Some(3) },
+        Op::ToggleScratchpad { id: Some(4) },
+        Op::FocusWindow(2),
+    ]);
+    assert_snapshot!(floating_order(&layout), @"[2, 4, 3]");
+
+    check_ops_on_layout(&mut layout, [Op::FocusWorkspaceDown]);
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[2, 4, 3] []");
+    assert_snapshot!(floating_order(&layout), @"[2, 4, 3]");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2, 3, 4], focus: Some(2)");
+}
+
+#[test]
+fn shown_window_follows_workspace_to_other_output() {
+    // The output with the shown window is removed.
+    let layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddOutput(2),
+        Op::FocusOutput(2),
+        window(3, 100),
+        Op::FocusOutput(1),
+        window(1, 100),
+        floating_window(2),
+        hide(2),
+        toggle(),
+        Op::RemoveOutput(1),
+    ]);
+    assert_snapshot!(workspaces(&layout), @"output2: *[3, 2] [1] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
+
+    // The emptied workspace is cleaned up right away since there's no workspace switch.
+    let layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddOutput(2),
+        Op::FocusOutput(2),
+        window(3, 100),
+        Op::FocusOutput(1),
+        floating_window(2),
+        hide(2),
+        toggle(),
+        Op::RemoveOutput(1),
+    ]);
+    assert_snapshot!(workspaces(&layout), @"output2: *[3, 2] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
+
+    // The workspace with the shown window goes back to its original output when it's added, but
+    // isn't activated there.
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1, 100),
+        Op::AddOutput(2),
+        Op::FocusOutput(2),
+        window(3, 100),
+        Op::FocusWorkspaceDown,
+        window(4, 100),
+        Op::FocusWorkspaceUp,
+        floating_window(2),
+        hide(2),
+        Op::RemoveOutput(2),
+        Op::FocusWorkspace(2),
+        toggle(),
+    ]);
+    assert_snapshot!(workspaces(&layout), @"output1: [1] [3] *[4, 2] []");
+    check_ops_on_layout(&mut layout, [Op::AddOutput(2)]);
+    assert_snapshot!(workspaces(&layout), @"output1: *[1] []; output2: *[3, 2] [4] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(1)");
+
+    // The workspace with the shown window is moved to another output without activating it.
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddOutput(2),
+        window(1, 100),
+        floating_window(2),
+        hide(2),
+        toggle(),
+        Op::FocusOutput(2),
+    ]);
+    let output1 = layout.outputs().find(|o| o.name() == "output1").cloned();
+    let output2 = layout.outputs().find(|o| o.name() == "output2").cloned();
+    assert!(!layout.move_workspace_to_output_by_id(0, output1, &output2.unwrap()));
+    layout.verify_invariants();
+    assert_snapshot!(workspaces(&layout), @"output1: *[]; output2: [1] *[2] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
+}
