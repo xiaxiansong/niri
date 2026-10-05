@@ -1219,59 +1219,33 @@ impl<W: LayoutElement> Layout<W> {
         match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
                 for mon in monitors {
-                    for (idx, ws) in mon.workspaces.iter_mut().enumerate() {
-                        if ws.has_window(window) {
-                            let removed = ws.remove_tile(window, transaction);
+                    let Some(idx) = mon.workspaces.iter().position(|ws| ws.has_window(window))
+                    else {
+                        continue;
+                    };
 
-                            if fill_view && !removed.is_floating {
-                                ws.fill_view_after_removal();
-                            }
+                    let ws = &mut mon.workspaces[idx];
+                    let removed = ws.remove_tile(window, transaction);
 
-                            // Clean up empty workspaces that are not active and not last.
-                            if !ws.has_windows_or_name()
-                                && idx != mon.active_workspace_idx
-                                && idx != mon.workspaces.len() - 1
-                                && mon.workspace_switch.is_none()
-                            {
-                                mon.workspaces.remove(idx);
-
-                                if idx < mon.active_workspace_idx {
-                                    mon.active_workspace_idx -= 1;
-                                }
-                            }
-
-                            // Special case handling when empty_workspace_above_first is set and all
-                            // workspaces are empty.
-                            if mon.options.layout.empty_workspace_above_first
-                                && mon.workspaces.len() == 2
-                                && mon.workspace_switch.is_none()
-                            {
-                                assert!(!mon.workspaces[0].has_windows_or_name());
-                                assert!(!mon.workspaces[1].has_windows_or_name());
-                                mon.workspaces.remove(1);
-                                mon.active_workspace_idx = 0;
-                            }
-                            return Some(removed);
-                        }
+                    if fill_view && !removed.is_floating {
+                        ws.fill_view_after_removal();
                     }
+
+                    mon.clean_up_workspace_after_removal(idx);
+                    return Some(removed);
                 }
             }
             MonitorSet::NoOutputs { workspaces, .. } => {
-                for (idx, ws) in workspaces.iter_mut().enumerate() {
-                    if ws.has_window(window) {
-                        let removed = ws.remove_tile(window, transaction);
+                if let Some(idx) = workspaces.iter().position(|ws| ws.has_window(window)) {
+                    let ws = &mut workspaces[idx];
+                    let removed = ws.remove_tile(window, transaction);
 
-                        if fill_view && !removed.is_floating {
-                            ws.fill_view_after_removal();
-                        }
-
-                        // Clean up empty workspaces.
-                        if !ws.has_windows_or_name() {
-                            workspaces.remove(idx);
-                        }
-
-                        return Some(removed);
+                    if fill_view && !removed.is_floating {
+                        ws.fill_view_after_removal();
                     }
+
+                    clean_up_no_outputs_workspace_after_removal(workspaces, idx);
+                    return Some(removed);
                 }
             }
         }
@@ -5083,6 +5057,17 @@ impl<W: LayoutElement> Layout<W> {
 impl<W: LayoutElement> Default for MonitorSet<W> {
     fn default() -> Self {
         Self::NoOutputs { workspaces: vec![] }
+    }
+}
+
+/// Cleans up the workspace at `idx` after removing a window from it, with no outputs.
+fn clean_up_no_outputs_workspace_after_removal<W: LayoutElement>(
+    workspaces: &mut Vec<Workspace<W>>,
+    idx: usize,
+) {
+    // Clean up empty workspaces.
+    if !workspaces[idx].has_windows_or_name() {
+        workspaces.remove(idx);
     }
 }
 

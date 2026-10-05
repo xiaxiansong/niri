@@ -678,6 +678,34 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
+    /// Cleans up the workspace at `idx` after removing a window from it.
+    pub(super) fn clean_up_workspace_after_removal(&mut self, idx: usize) {
+        // Clean up empty workspaces that are not active and not last.
+        if !self.workspaces[idx].has_windows_or_name()
+            && idx != self.active_workspace_idx
+            && idx != self.workspaces.len() - 1
+            && self.workspace_switch.is_none()
+        {
+            self.workspaces.remove(idx);
+
+            if idx < self.active_workspace_idx {
+                self.active_workspace_idx -= 1;
+            }
+        }
+
+        // Special case handling when empty_workspace_above_first is set and all workspaces are
+        // empty.
+        if self.options.layout.empty_workspace_above_first
+            && self.workspaces.len() == 2
+            && self.workspace_switch.is_none()
+        {
+            assert!(!self.workspaces[0].has_windows_or_name());
+            assert!(!self.workspaces[1].has_windows_or_name());
+            self.workspaces.remove(1);
+            self.active_workspace_idx = 0;
+        }
+    }
+
     pub fn unname_workspace(&mut self, id: WorkspaceId) -> bool {
         let Some(idx) = self.idx_of_ws(id) else {
             return false;
