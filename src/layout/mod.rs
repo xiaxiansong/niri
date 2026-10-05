@@ -4649,6 +4649,9 @@ impl<W: LayoutElement> Layout<W> {
         // Dragging in the overview shouldn't switch the workspace and so on.
         let allow_to_activate_workspace = !self.overview_open;
 
+        // Adding the tile will take it out of the scratchpad, remember to restore it after.
+        let was_scratchpad = move_.tile.in_scratchpad;
+
         match &mut self.monitor_set {
             MonitorSet::Normal {
                 monitors,
@@ -4847,6 +4850,19 @@ impl<W: LayoutElement> Layout<W> {
                 .find(|ws| Some(ws.id()) == move_.source_workspace)
             {
                 ws.fill_view_after_removal();
+            }
+        }
+
+        // A shown scratchpad window remains in the scratchpad when dropped onto the floating
+        // layout of an active workspace.
+        if was_scratchpad {
+            if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
+                for mon in monitors {
+                    let ws = &mut mon.workspaces[mon.active_workspace_idx];
+                    if ws.restore_scratchpad_shown(window) {
+                        break;
+                    }
+                }
             }
         }
     }

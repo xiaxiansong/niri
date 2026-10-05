@@ -643,6 +643,12 @@ impl<W: LayoutElement> Workspace<W> {
         is_floating: bool,
         anim: Option<niri_config::Animation>,
     ) {
+        // Adding a tile to a workspace takes it out of the scratchpad. Showing scratchpad tiles
+        // goes through add_scratchpad_tile() instead.
+        if tile.in_scratchpad {
+            set_tile_scratchpad(&mut tile, ScratchpadState::None);
+        }
+
         self.enter_output_for_window(tile.window());
         tile.restore_to_floating = is_floating;
 
@@ -738,9 +744,13 @@ impl<W: LayoutElement> Workspace<W> {
         &mut self,
         col_idx: usize,
         tile_idx: Option<usize>,
-        tile: Tile<W>,
+        mut tile: Tile<W>,
         activate: bool,
     ) {
+        if tile.in_scratchpad {
+            set_tile_scratchpad(&mut tile, ScratchpadState::None);
+        }
+
         self.enter_output_for_window(tile.window());
         self.scrolling
             .add_tile_to_column(col_idx, tile_idx, tile, activate);
@@ -794,6 +804,22 @@ impl<W: LayoutElement> Workspace<W> {
             set_tile_scratchpad(tile, ScratchpadState::None);
         }
 
+        true
+    }
+
+    /// Puts a floating window back into the scratchpad as shown.
+    ///
+    /// Returns `false` if the window isn't in the floating layout of this workspace.
+    pub fn restore_scratchpad_shown(&mut self, id: &W::Id) -> bool {
+        let Some(tile) = self
+            .floating
+            .tiles_mut()
+            .find(|tile| tile.window().id() == id)
+        else {
+            return false;
+        };
+
+        set_tile_scratchpad(tile, ScratchpadState::Shown);
         true
     }
 
@@ -1477,7 +1503,13 @@ impl<W: LayoutElement> Workspace<W> {
             .unwrap();
 
         if self.floating.has_window(&id) {
-            let removed = self.floating.remove_tile(&id);
+            let mut removed = self.floating.remove_tile(&id);
+
+            // Tiled windows are never in the scratchpad.
+            if removed.tile.in_scratchpad {
+                set_tile_scratchpad(&mut removed.tile, ScratchpadState::None);
+            }
+
             // FIXME: compute closest pos?
             self.scrolling.add_tile(
                 None,
