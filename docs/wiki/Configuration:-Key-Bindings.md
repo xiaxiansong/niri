@@ -371,7 +371,8 @@ The scratchpad lets you hide windows and bring them back with a key press, for e
 
 A window in the scratchpad is either hidden or shown.
 Hidden windows are not on any workspace and are not drawn.
-Shown windows are regular floating windows on the workspace where they were shown.
+Shown windows are regular floating windows on the active workspace of a monitor.
+When you switch workspaces on that monitor, they move along to the new active workspace (see below).
 
 - `move-window-to-scratchpad` hides the focused window.
 A tiled window becomes floating.
@@ -380,7 +381,7 @@ This action does nothing if the window has open dialogs or other child windows.
 - `scratchpad-show` does the first of the following that applies:
   1. If the focused window is a shown scratchpad window, hide it.
   2. If there are shown scratchpad windows on the focused workspace, focus the one that was shown most recently.
-  3. If there are shown scratchpad windows elsewhere, move the one that was shown most recently to the focused workspace and focus it.
+  3. If there are shown scratchpad windows on other monitors, move the one that was shown most recently to the focused workspace and focus it.
      If that window has open child windows, focus it where it is instead.
   4. If there are hidden windows, show the one that has been hidden the longest and focus it.
 - `remove-window-from-scratchpad` takes the focused window out of the scratchpad.
@@ -399,6 +400,22 @@ A window leaves the scratchpad when it is moved to the tiling layout (including 
 When you drag a shown window with the mouse, it stays in the scratchpad if you drop it onto the floating layout of a monitor's active workspace.
 If an application unmaps its window (for example, minimizes it to the tray) and maps it again later, it comes back as a regular window.
 
+Shown windows follow the active workspace of their monitor:
+
+- Switching workspaces in any way (binds, gestures, a bar, or focusing a window on another workspace) moves the shown windows to the new active workspace, keeping their stacking order.
+A shown window that was focused stays focused; otherwise the focus on the new workspace doesn't change.
+- A workspace with only shown scratchpad windows counts as a regular non-empty workspace.
+So, switching to the empty workspace at the bottom while a window is shown makes it non-empty, and niri adds a new empty workspace below it (or above it with `empty-workspace-above-first`, when switching to the first workspace).
+A workspace that the shown windows leave empty is removed as usual.
+- When a workspace moves to another monitor (for example, its monitor is disconnected), its shown windows move with it and then to the active workspace of that monitor.
+- Windows don't follow across monitors: focusing another monitor leaves the shown windows where they are.
+
+Current limitations:
+
+- Dialogs and other child windows of a shown window don't follow it, they stay on the original workspace.
+- During a workspace switch gesture, shown windows stay on the old workspace and slide away with it, then move to the new workspace when you lift your fingers.
+- In the overview, shown windows jump to the workspace you switch to.
+
 Activating a hidden window shows it: for example, clicking it in a taskbar, `focus-window --id`, or an application asking for focus (subject to the `on-xdg-activate` setting).
 When a hidden window opens a dialog, the window is shown first, and the dialog opens next to it.
 
@@ -409,10 +426,11 @@ It's a good idea to turn off key repeat for these binds, so that holding the key
 
 ```kdl
 binds {
-    Mod+Shift+Minus repeat=false { move-window-to-scratchpad; }
-    Mod+Minus       repeat=false { scratchpad-show; }
-    Mod+Grave       repeat=false { scratchpad-show app-id="^dropdown$"; }
-    Mod+M           repeat=false { scratchpad-show app-id="^(Spotify|spotify)$"; }
+    Mod+Shift+Z repeat=false { move-window-to-scratchpad; }
+    Mod+Z       repeat=false { scratchpad-show; }
+    Mod+Ctrl+Z  repeat=false { remove-window-from-scratchpad; }
+    Mod+Grave   repeat=false { scratchpad-show app-id="^dropdown$"; }
+    Mod+Shift+M repeat=false { scratchpad-show app-id="^(Spotify|spotify)$"; }
 }
 
 window-rule {
