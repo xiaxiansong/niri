@@ -569,7 +569,14 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         if activate {
+            let id = self.workspaces[workspace_idx]
+                .active_window()
+                .unwrap()
+                .id()
+                .clone();
             self.activate_workspace(workspace_idx);
+            // Shown scratchpad windows following to this workspace shouldn't take the focus.
+            self.active_workspace().activate_window(&id);
         }
     }
 
@@ -588,6 +595,7 @@ impl<W: LayoutElement> Monitor<W> {
     ) {
         let (workspace_idx, target) = self.resolve_add_window_target(target);
 
+        let id = tile.window().id().clone();
         let workspace = &mut self.workspaces[workspace_idx];
 
         workspace.add_tile(
@@ -609,6 +617,8 @@ impl<W: LayoutElement> Monitor<W> {
 
         if allow_to_activate_workspace && activate.map_smart(|| false) {
             self.activate_workspace(workspace_idx);
+            // Shown scratchpad windows following to this workspace shouldn't take the focus.
+            self.active_workspace().activate_window(&id);
         }
     }
 
@@ -667,6 +677,7 @@ impl<W: LayoutElement> Monitor<W> {
         // FIXME: Refactor ActivateWindow enum to make this better.
         allow_to_activate_workspace: bool,
     ) {
+        let id = tile.window().id().clone();
         let workspace = &mut self.workspaces[workspace_idx];
 
         workspace.add_tile_to_column(column_idx, tile_idx, tile, activate);
@@ -681,6 +692,8 @@ impl<W: LayoutElement> Monitor<W> {
 
         if allow_to_activate_workspace && activate {
             self.activate_workspace(workspace_idx);
+            // Shown scratchpad windows following to this workspace shouldn't take the focus.
+            self.active_workspace().activate_window(&id);
         }
     }
 

@@ -1719,7 +1719,13 @@ impl<W: LayoutElement> Layout<W> {
                         Some(WorkspaceSwitch::Gesture(gesture))
                             if gesture.current_idx.floor() == workspace_idx as f64
                                 || gesture.current_idx.ceil() == workspace_idx as f64 => {}
-                        _ => mon.switch_workspace(workspace_idx),
+                        _ => {
+                            mon.switch_workspace(workspace_idx);
+
+                            // Shown scratchpad windows following to this workspace shouldn't take
+                            // the focus.
+                            mon.active_workspace().activate_window(window);
+                        }
                     }
 
                     return;
@@ -1759,7 +1765,14 @@ impl<W: LayoutElement> Layout<W> {
                         Some(WorkspaceSwitch::Gesture(gesture))
                             if gesture.current_idx.floor() == workspace_idx as f64
                                 || gesture.current_idx.ceil() == workspace_idx as f64 => {}
-                        _ => mon.switch_workspace(workspace_idx),
+                        _ => {
+                            mon.switch_workspace(workspace_idx);
+
+                            // Shown scratchpad windows following to this workspace shouldn't take
+                            // the focus.
+                            mon.active_workspace()
+                                .activate_window_without_raising(window);
+                        }
                     }
 
                     return;
