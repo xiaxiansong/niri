@@ -4952,8 +4952,12 @@ impl Niri {
         //
         // The reason to do this at all is that it keeps track of whether the surface is visible or
         // not in a unified way with the pointer surfaces, which makes the logic elsewhere simpler.
+        //
+        // Hidden scratchpad windows are never rendered, so updating them on every output clears
+        // their primary scanout output.
 
-        for mapped in self.layout.windows_for_output(output) {
+        let hidden = self.layout.scratchpad_hidden_windows();
+        for mapped in self.layout.windows_for_output(output).chain(hidden) {
             let win = &mapped.window;
             let offscreen_data = mapped.offscreen_data();
             let offscreen_data = offscreen_data.as_ref();
