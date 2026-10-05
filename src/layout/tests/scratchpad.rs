@@ -950,7 +950,7 @@ fn shown_window_follows_workspace_to_other_output() {
     assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
 
     // The workspace with the shown window goes back to its original output when it's added, but
-    // isn't activated there.
+    // the shown window stays on its output.
     let mut layout = check_ops([
         Op::AddOutput(1),
         window(1, 100),
@@ -968,10 +968,11 @@ fn shown_window_follows_workspace_to_other_output() {
     ]);
     assert_snapshot!(workspaces(&layout), @"output1: [1] [3] *[4, 2] []");
     check_ops_on_layout(&mut layout, [Op::AddOutput(2)]);
-    assert_snapshot!(workspaces(&layout), @"output1: *[1] []; output2: *[3, 2] [4] []");
-    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(1)");
+    assert_snapshot!(workspaces(&layout), @"output1: *[1, 2] []; output2: *[3] [4] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
 
-    // The workspace with the shown window is moved to another output without activating it.
+    // The workspace with the shown window is moved to another output, but the shown window stays
+    // on its output.
     let mut layout = check_ops([
         Op::AddOutput(1),
         Op::AddOutput(2),
@@ -985,8 +986,8 @@ fn shown_window_follows_workspace_to_other_output() {
     let output2 = layout.outputs().find(|o| o.name() == "output2").cloned();
     assert!(!layout.move_workspace_to_output_by_id(0, output1, &output2.unwrap()));
     layout.verify_invariants();
-    assert_snapshot!(workspaces(&layout), @"output1: *[]; output2: [1] *[2] []");
-    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
+    assert_snapshot!(workspaces(&layout), @"output1: *[2] []; output2: [1] *[]");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: None");
 }
 
 #[test]

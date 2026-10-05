@@ -834,6 +834,7 @@ impl<W: LayoutElement> Layout<W> {
                 let mut workspaces = vec![];
                 for source_idx in 0..monitors.len() {
                     let mut stopped_ws_switch = false;
+                    let mut scratchpad_tiles = Vec::new();
 
                     for i in (0..monitors[source_idx].workspaces.len()).rev() {
                         let preferred = monitors[source_idx].workspaces[i].find_preferred_output(
@@ -847,6 +848,10 @@ impl<W: LayoutElement> Layout<W> {
                         }
 
                         let source = &mut monitors[source_idx];
+
+                        // Shown scratchpad windows stay on their output.
+                        scratchpad_tiles.extend(source.workspaces[i].take_shown_scratchpad_tiles());
+
                         let ws = source.workspaces.remove(i);
 
                         // FIXME: this can be coded in a way that the workspace switch won't be
@@ -895,6 +900,8 @@ impl<W: LayoutElement> Layout<W> {
                     {
                         source.clean_up_workspaces();
                     }
+
+                    source.add_shown_scratchpad_tiles(scratchpad_tiles);
                 }
                 workspaces.reverse();
 
@@ -4172,8 +4179,13 @@ impl<W: LayoutElement> Layout<W> {
         let activate =
             current_idx == *active_monitor_idx && old_idx == current.active_workspace_idx;
 
+        // Shown scratchpad windows stay on their output.
+        let scratchpad_tiles = current.workspaces[old_idx].take_shown_scratchpad_tiles();
+
         let mut ws = current.remove_workspace_by_idx(old_idx);
         ws.original_outputs = vec![OutputId::new(new_output)];
+
+        current.add_shown_scratchpad_tiles(scratchpad_tiles);
 
         let target = &mut monitors[target_idx];
         target.insert_workspace(ws, target.active_workspace_idx + 1, activate);
