@@ -487,6 +487,8 @@ impl<W: LayoutElement> Monitor<W> {
                 }
             }
         }
+
+        self.scratchpad_follow();
     }
 
     pub(super) fn resolve_add_window_target<'a>(
@@ -808,6 +810,9 @@ impl<W: LayoutElement> Monitor<W> {
 
         self.workspace_switch = None;
         self.clean_up_workspaces();
+
+        // The workspace could've been inserted without activating.
+        self.scratchpad_follow();
     }
 
     pub fn append_workspaces(&mut self, mut workspaces: Vec<Workspace<W>>) {
@@ -845,6 +850,8 @@ impl<W: LayoutElement> Monitor<W> {
         // (outside the workspace switch), we don't need to cancel it.
         self.workspace_switch = None;
         self.clean_up_workspaces();
+
+        self.scratchpad_follow();
     }
 
     pub fn move_down_or_to_workspace_down(&mut self) {
@@ -2151,6 +2158,8 @@ impl<W: LayoutElement> Monitor<W> {
             velocity,
             self.options.animations.workspace_switch.0,
         )));
+
+        self.scratchpad_follow();
 
         true
     }

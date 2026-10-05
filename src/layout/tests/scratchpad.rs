@@ -420,7 +420,8 @@ fn shown_window_elsewhere_is_brought_over() {
         format!("{} ws {idx}/{}", mon.output_name(), mon.workspaces.len())
     };
 
-    // Shown on another output.
+    // Shown on another output. Shown windows on inactive workspaces of the same output can't
+    // happen since they follow the active workspace.
     let mut layout = check_ops([
         Op::AddOutput(1),
         Op::AddOutput(2),
@@ -438,33 +439,6 @@ fn shown_window_elsewhere_is_brought_over() {
     layout.verify_invariants();
     assert_snapshot!(location(&layout, 2), @"output2 ws 0/2");
     assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
-
-    // Shown on an inactive workspace of the same output.
-    let layout = check_ops([
-        Op::AddOutput(1),
-        window(1, 100),
-        window(2, 100),
-        hide(2),
-        toggle(),
-        Op::FocusWorkspaceDown,
-        Op::CompleteAnimations,
-        toggle(),
-    ]);
-    assert_snapshot!(location(&layout, 2), @"output1 ws 1/3");
-    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
-
-    // The source workspace becomes empty and gets cleaned up.
-    let layout = check_ops([
-        Op::AddOutput(1),
-        window(1, 100),
-        hide(1),
-        toggle(),
-        Op::FocusWorkspaceDown,
-        Op::CompleteAnimations,
-        toggle(),
-    ]);
-    assert_snapshot!(location(&layout, 1), @"output1 ws 0/2");
-    assert_snapshot!(summary(&layout), @"hidden: [], shown: [1], focus: Some(1)");
 }
 
 fn child(id: usize, parent: usize) -> TestWindowParams {

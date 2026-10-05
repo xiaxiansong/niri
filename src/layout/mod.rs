@@ -813,6 +813,14 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    fn scratchpad_follow(&mut self) {
+        if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
+            for mon in monitors {
+                mon.scratchpad_follow();
+            }
+        }
+    }
+
     pub fn add_output(&mut self, output: Output, layout_config: Option<LayoutPart>) {
         self.monitor_set = match mem::take(&mut self.monitor_set) {
             MonitorSet::Normal {
@@ -928,7 +936,10 @@ impl<W: LayoutElement> Layout<W> {
                     active_monitor_idx: 0,
                 }
             }
-        }
+        };
+
+        // Workspaces may have moved between monitors.
+        self.scratchpad_follow();
     }
 
     pub fn remove_output(&mut self, output: &Output) {
@@ -996,7 +1007,10 @@ impl<W: LayoutElement> Layout<W> {
             MonitorSet::NoOutputs { .. } => {
                 panic!("tried to remove output when there were already none")
             }
-        }
+        };
+
+        // Workspaces may have moved between monitors.
+        self.scratchpad_follow();
     }
 
     pub fn add_column_by_idx(
@@ -5632,6 +5646,9 @@ impl<W: LayoutElement> Layout<W> {
                             }
                         }
                     }
+
+                    // Fallback in case some path changed the active workspace without following.
+                    mon.scratchpad_follow();
                 }
             }
             MonitorSet::NoOutputs { workspaces, .. } => {
