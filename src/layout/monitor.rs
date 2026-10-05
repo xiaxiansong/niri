@@ -476,17 +476,15 @@ impl<W: LayoutElement> Monitor<W> {
             }
             _ => {
                 // Don't animate if nothing changed.
-                if prev_active_idx == idx {
-                    return;
+                if prev_active_idx != idx {
+                    self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::new(
+                        self.clock.clone(),
+                        current_idx,
+                        idx as f64,
+                        0.,
+                        config,
+                    )));
                 }
-
-                self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::new(
-                    self.clock.clone(),
-                    current_idx,
-                    idx as f64,
-                    0.,
-                    config,
-                )));
             }
         }
     }
