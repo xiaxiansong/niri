@@ -329,13 +329,15 @@ fn remove_window_impl(&mut self, window: &W::Id, transaction: Transaction, fill_
 
 **`scratchpad-show [app-id=RE | --id N]`**（`Layout::toggle_scratchpad(filter)`），按顺序判断，命中即停：
 
-1. 当前聚焦窗口 F 处于 Shown 且通过过滤器 → **隐藏 F**（走 §4.5.1，可能因子窗口被拒绝，此时什么都不做）。
-2. 聚焦显示器的活动工作区上，有 Shown 状态的候选 → 聚焦其中 `scratchpad_shown_seq` 最大的那个。
+1. 当前聚焦窗口 F 处于 Shown 且通过过滤器 → **隐藏 F**（走 §4.5.1，可能因子窗口被拒绝，此时什么都不做）。返回 `Hidden(id)`；被拒绝时返回 `Nothing`。
+2. 聚焦显示器的活动工作区上，有 Shown 状态的候选 → 聚焦其中 `scratchpad_shown_seq` 最大的那个。返回 `Focused(id)`。
 3. 聚焦显示器活动工作区**以外**有 Shown 状态的候选（其他显示器；或 M4 跟随实现之前，同一显示器的非活动工作区）→ 取 `scratchpad_shown_seq` 最大者：
-   - 没有可见子窗口：从原工作区移除（`Workspace::remove_tile`，会 `output_leave`），加入当前活动工作区浮动层并聚焦（`add_scratchpad_tile(.., enter_output = true)`，位置按比例恢复），然后 `ensure_empty_workspaces_after_add`；若原工作区因此变空且不是其显示器的活动工作区，就走 §4.5.1 第 11 步的清理辅助函数；
-   - 有可见子窗口：改为 `activate_window(id)`（焦点切到它所在的显示器/工作区），不搬动。
-4. 有 Hidden 状态的候选 → 取隐藏队列中第一个匹配者（FIFO），呈现并聚焦。
-5. 否则什么都不做，打 `debug!`。
+   - 没有可见子窗口：从原工作区移除（`Workspace::remove_tile`，会 `output_leave`），赋予新的 `scratchpad_shown_seq`（视为一次呈现），加入当前活动工作区浮动层并聚焦（`add_scratchpad_tile(.., enter_output = true)`，位置按比例恢复），然后 `ensure_empty_workspaces_after_add`；若原工作区因此变空且不是其显示器的活动工作区，就走 §4.5.1 第 11 步的清理辅助函数。返回 `Shown(id)`；
+   - 有可见子窗口：改为 `activate_window(id)`（焦点切到它所在的显示器/工作区），不搬动。返回 `Focused(id)`。
+4. 有 Hidden 状态的候选 → 取隐藏队列中第一个匹配者（FIFO），呈现并聚焦。返回 `Shown(id)`。
+5. 否则什么都不做，打 `debug!`，返回 `Nothing`。
+
+无输出（`MonitorSet::NoOutputs`）时没有聚焦的显示器，五条规则都不适用，直接返回 `Nothing`。
 
 由此得到的性质（写入用户文档）：
 
@@ -345,7 +347,7 @@ fn remove_window_impl(&mut self, window: &W::Id, transaction: Transaction, fill_
 
 **`move-window-to-scratchpad [--id N]`**（`Layout::move_to_scratchpad`）：None 或 Shown → Hidden；Hidden → 无操作；拖动中（Starting 或 Moving）→ 无操作；有可见子窗口 → 无操作 + `debug!`。
 
-**`remove-window-from-scratchpad [--id N]`**（`Layout::remove_from_scratchpad`）：Shown → None（窗口保持为当前位置的普通浮动窗口）；Hidden → 在聚焦显示器的活动工作区呈现并聚焦，然后清标记；无输出 → 无操作；None → 无操作。拖动中的 Shown 窗口：清标记即可。
+**`remove-window-from-scratchpad [--id N]`**（`Layout::remove_from_scratchpad`）：Shown → None（窗口保持为当前位置的普通浮动窗口）；Hidden → 在聚焦显示器的活动工作区呈现并聚焦，然后清标记；Hidden 且无输出 → 无操作；None → 无操作。拖动中的 Shown 窗口：清标记即可。Shown 窗口在无输出工作区中（移除全部输出后留在原工作区浮动层，只能用 `--id` 指定）→ 照常清标记。
 
 **激活（`Layout::activate_window(id)`）**：Hidden → 呈现并聚焦（§4.5.3），**永不隐藏**；Shown/None → 原逻辑。`activate_window_without_raising(id)`：Hidden → 无操作。
 
@@ -392,9 +394,9 @@ fn set_tile_scratchpad<W: LayoutElement>(tile: &mut Tile<W>, state: ScratchpadSt
 }
 ```
 
-`LayoutElement` 新增 `fn set_scratchpad_state(&mut self, state: ScratchpadState);`。
+`LayoutElement` 新增 `fn set_scratchpad_state(&mut self, state: ScratchpadState);` 和 `fn scratchpad_state(&self) -> ScratchpadState;`（读取方法写法同 `sizing_mode()` / `is_urgent()`；`verify_invariants()` 是泛型代码，只能经 trait 读取窗口状态）。
 
-- `src/window/mapped.rs`：照抄 `set_floating()` 的写法（约 998 行）：存字段，状态变化时置 `need_to_recompute_rules`；另提供 `pub fn scratchpad_state(&self)`。
+- `src/window/mapped.rs`：`set_scratchpad_state` 照抄 `set_floating()` 的写法（约 998 行）：存字段，状态变化时置 `need_to_recompute_rules`；`scratchpad_state` 返回该字段（niri 层经 trait 调用，不再另设同名固有方法）。
 - 测试的 `TestWindow`：用 `Cell` 记录状态，供不变量断言。
 
 #### 4.5.1 隐藏：`Layout::move_to_scratchpad(&mut self, window: Option<&W::Id>) -> Option<W::Id>`
@@ -404,7 +406,7 @@ fn set_tile_scratchpad<W: LayoutElement>(tile: &mut Tile<W>, state: ScratchpadSt
 1. `id = window` 或 `self.focus()` 的 id；都没有则返回 `None`。
 2. 拖动状态（Starting 或 Moving）涉及该 id → `None`。
 3. 已是 Hidden → `None`。
-4. **子窗口检查**：存在任何非 Hidden 窗口 `w` 满足 `w.is_child_of(target)`（遍历所有工作区和拖动中的窗口）→ `debug!` 后返回 `None`。
+4. **子窗口检查**：存在任何非 Hidden 窗口 `w` 满足 `w.is_child_of(target)`（遍历所有工作区和拖动中的窗口）→ `debug!` 后返回 `None`。直接遍历工作区和拖动中的 Tile，不经过 `windows()`：M2b 让 `windows()` 包含隐藏窗口后，这里仍只看非隐藏窗口。
 5. 找到含该窗口的工作区（Normal：显示器/工作区下标；NoOutputs：工作区下标）。
 6. 先 `ws.set_fullscreen(&id, false); ws.set_maximized(&id, false);`，与 `interactive_move_update()` 的做法一致。这可能经 `toggle_window_floating` 把窗口挪回浮动层（同时触发功能一）。
 7. `let removed = ws.remove_tile(&id, Transaction::new());`（内部会 `output_leave`、更新焦点、浮动层还会记录尺寸和位置）。
@@ -441,7 +443,7 @@ fn set_tile_scratchpad<W: LayoutElement>(tile: &mut Tile<W>, state: ScratchpadSt
    - `if activate || self.scrolling.is_empty() { self.floating_is_active = FloatingActive::Yes; }`；
    - **不**清标记（区别于 `add_tile`）。
 6. 开窗动画：添加后对该 Tile 调用 `start_open_animation()`。动画关闭时 Animation 即刻完成。
-7. `mon.ensure_empty_workspaces_after_add(ws_idx)`：从 `Monitor::add_tile()` 末尾（约 605–614 行）提取——若 `ws_idx` 是最后一个就 `add_workspace_bottom()`；若 `empty_workspace_above_first && ws_idx == 0` 就 `add_workspace_top()`。原 `add_tile` 改为调用它。不修改 `original_outputs`。
+7. `mon.ensure_empty_workspaces_after_add(ws_idx)`：从 `Monitor::add_tile()` 末尾（约 605–614 行）提取——若 `ws_idx` 是最后一个就 `add_workspace_bottom()`；若 `empty_workspace_above_first && ws_idx == 0` 就 `add_workspace_top()`。签名 `fn ensure_empty_workspaces_after_add(&mut self, idx: usize) -> usize`，返回调整后的下标（`add_workspace_top()` 之后为 `idx + 1`），原 `add_tile` 用它激活工作区。原 `add_tile` 改为调用它；`Monitor::add_column()` 中相同的代码本轮不动。不修改 `original_outputs`。
 8. 返回 `true`。
 
 跨显示器尺寸（R4）：位置按比例恢复；浮动层的位置校正只保证窗口部分可见，**不会**自动缩小过大的窗口。v1 不承诺完全落在屏内，只承诺可找回、可移动。
@@ -471,7 +473,7 @@ pub fn scratchpad_hidden_windows(&self) -> impl Iterator<Item = &W>;
 #### 4.5.4 生命周期分支
 
 - `remove_window_impl()`：在 interactive_move 分支之后、遍历工作区之前，先查隐藏队列。找到就取出，返回 `RemovedTile { tile, width: ColumnWidth::Fixed(tile.tile_size().w), is_full_width: false, is_floating: true }`；不触发功能一，也不需要清理工作区。
-- `start_close_animation_for_window()`、`store_unmap_snapshot()`、`clear_unmap_snapshot()`：对隐藏窗口直接返回（关闭无动画）。
+- `start_close_animation_for_window()`、`store_unmap_snapshot()`、`clear_unmap_snapshot()`：对隐藏窗口直接返回（关闭无动画）。**现有实现已自然满足**：三者都直接遍历工作区查找窗口，找不到隐藏窗口即什么都不做，因此不加冗余检查。M2b 修改 A 类方法时，不要把它们改成经过 `windows()` / `has_window()` 查找。
 - 取消映射（`compositor.rs` 约 262–292 行）沿用现有流程：`stop_casts_for_target` → `window_mru_ui.remove_window` → `layout.remove_window`。隐藏窗口因此退出暂存区（D11）。
 
 #### 4.5.5 退出暂存区的落点
@@ -501,7 +503,8 @@ pub fn scratchpad_hidden_windows(&self) -> impl Iterator<Item = &W>;
 - `advance_animations()` / `are_animations_ongoing()`：不包含隐藏 Tile（它们没有动画）。`verify_invariants` 断言隐藏 Tile `!are_transitions_ongoing()`。
 - `update_shaders()`：对隐藏 Tile 调用 `tile.update_shaders()`。
 - `update_config()`：不需要处理隐藏 Tile（呈现时 `add_tile_at` 会 `update_config`）。
-- `descendants_added()`：隐藏窗口 → `false`。
+- `descendants_added()`：隐藏窗口 → `false`。现有实现只遍历工作区，已自然满足，不加代码（同 §4.5.4 的说明）。
+- refresh 末尾的 `scratchpad_follow()` 兜底属于 M4，M2 不做。
 
 #### 4.5.7 现有方法审计（必须逐个过）
 
@@ -662,6 +665,8 @@ ToggleScratchpad      { #[proptest(strategy = "proptest::option::of(1..=5usize)"
 RemoveWindowFromScratchpad { #[proptest(strategy = "proptest::option::of(1..=5usize)")] id: Option<usize> },
 ```
 
+M2a 先以 `#[proptest(skip)]` 加入（确定性用例可用、不参与随机生成），M2b 去掉 skip。`Op::Communicate` 需补隐藏队列分支（它直接遍历工作区）；激活用现有的 `Op::FocusWindow`（即 `activate_window`）。
+
 `random_operations_dont_panic` 会把它们与增删输出、切工作区、手势、拖动、全屏、`AddWindowNextTo`、`SetParent` 等随机组合。这是发现审计遗漏最有效的手段，要多跑几轮（可临时调大 `cases`）。
 
 **确定性用例**（新建 `src/layout/tests/scratchpad.rs`）：
@@ -783,7 +788,8 @@ fi
 | M0 | 基线：`cargo build`、`cargo test` 全绿（已完成编译缓存） | 记录基线测试数 |
 | M1a ✅ | F1-1 配置 → F1-2 纯重构（单独提交，快照零变化）→ F1-3 → F1-4 → §3.6 用例 1–16（用例 10 仅拖动中部分：拖动中源工作区视图不变；落点后夹紧依赖 F1-5，归 M1b）、18 | 换成日常使用版本 |
 | M1b ✅ | F1-5 拖走、F1-6 合并 + 用例 10、17 | 与 M1a 一起换成日常使用版本 |
-| M2 | 暂存区 Layout 核心：§4.5 全部（含审计）、§4.6、不变量 1–3、5–7、proptest Op、确定性用例（除跟随相关） | `random_operations_dont_panic` 多轮无 panic。此时显示中的窗口不跟随，停留在呈现时的工作区；**为保证不变量 4 不被违反，M2 暂不启用不变量 4** |
+| M2a | 暂存区 Layout 核心（上）：两步纯重构（§4.5.1 第 11 步清理辅助函数、§4.5.2 第 7 步 `ensure_empty_workspaces_after_add`）→ §4.5.0–§4.5.6（含 §4.3 五条规则、§4.5.1 第 4 步子窗口检查）→ 不变量 1–3、5–7 → §4.12 确定性用例 1–7、12、13、18–21。测试用的暂存区 Op 标 `#[proptest(skip)]`，不进随机生成 | 两步重构快照零变化；新用例全过并做反向验证；现有测试与快照不变 |
+| M2b | 暂存区 Layout 核心（下）：§4.5.7 审计、§4.6 子窗口、§4.12 proptest Op（去掉 skip，进入随机生成）、用例 15–17 | `random_operations_dont_panic` 多轮无 panic。M2（a/b）中显示中的窗口不跟随，停留在呈现时的工作区；**为保证不变量 4 不被违反，M2 暂不启用不变量 4** |
 | M3 | niri 集成：config 动作、IPC 动作/字段/变化检测/校验、`do_action`、§4.8 副作用与可见性、文档、客户端集成测试 | 可日常使用 |
 | M4 | 跟随：§4.7 全部调用点 + 不变量 4 + 用例 8–11、14 | |
 | M5 | 视觉：钉住渲染、专门的收起/展开动画（§8） | |
@@ -801,7 +807,8 @@ fi
 | M1a | ✅ 2026-10-05 | `87949e15` 配置、`a541a30f` 提取吸附端点、`e303873d` 夹紧函数、`9833ba51` 调用点、`18fca982` 测试 | — |
 | M1b | ✅ 2026-10-05 | `2fc8c299` F1-5、`1f38e79c` F1-6、`cabf5b38` 测试 | `cargo test --all` 249 / 0 失败（niri lib 226）；慢测试 134；`fill_view.rs` 共 21 个用例，新增触发点均做过反向验证 |
 | 功能一手动矩阵（§3.6） | ⏳ 待做 | — | 日常使用版本已打包（M1a + M1b） |
-| M2 | 未开始 | | |
+| M2a | 未开始 | | |
+| M2b | 未开始 | | |
 
 M1b 补充说明：
 
