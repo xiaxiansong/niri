@@ -24,8 +24,8 @@ use super::scrolling::{
 use super::shadow::Shadow;
 use super::tile::{Tile, TileRenderSnapshot};
 use super::{
-    ActivateWindow, HitType, InsertPosition, InteractiveResizeData, LayoutElement, Options,
-    RemovedTile, SizeFrac,
+    set_tile_scratchpad, ActivateWindow, HitType, InsertPosition, InteractiveResizeData,
+    LayoutElement, Options, RemovedTile, ScratchpadState, SizeFrac,
 };
 use crate::animation::Clock;
 use crate::layout::RenderLayer;
@@ -765,6 +765,36 @@ impl<W: LayoutElement> Workspace<W> {
         if activate {
             self.floating_is_active = FloatingActive::No;
         }
+    }
+
+    /// Adds a scratchpad tile to the floating layout.
+    ///
+    /// Unlike [`Workspace::add_tile()`], this keeps the tile in the scratchpad.
+    pub fn add_scratchpad_tile(&mut self, tile: Tile<W>, activate: bool, enter_output: bool) {
+        if enter_output {
+            self.enter_output_for_window(tile.window());
+        }
+
+        self.floating.add_tile(tile, activate);
+
+        if activate || self.scrolling.is_empty() {
+            self.floating_is_active = FloatingActive::Yes;
+        }
+    }
+
+    /// Takes the window out of the scratchpad, leaving it as a regular floating window.
+    ///
+    /// Returns `false` if the window isn't on this workspace.
+    pub fn clear_scratchpad(&mut self, id: &W::Id) -> bool {
+        let Some(tile) = self.tiles_mut().find(|tile| tile.window().id() == id) else {
+            return false;
+        };
+
+        if tile.in_scratchpad {
+            set_tile_scratchpad(tile, ScratchpadState::None);
+        }
+
+        true
     }
 
     fn update_focus_floating_tiling_after_removing(&mut self, removed_from_floating: bool) {

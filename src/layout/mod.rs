@@ -409,6 +409,19 @@ pub enum ScratchpadState {
     Shown,
 }
 
+/// Result of [`Layout::toggle_scratchpad()`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScratchpadToggle<Id> {
+    /// The focused window was hidden.
+    Hidden(Id),
+    /// An already shown window was focused.
+    Focused(Id),
+    /// A window was shown on the active workspace.
+    Shown(Id),
+    /// Nothing happened.
+    Nothing,
+}
+
 #[derive(Debug)]
 struct Scratchpad<W: LayoutElement> {
     /// Hidden tiles.
@@ -416,7 +429,6 @@ struct Scratchpad<W: LayoutElement> {
     /// FIFO: hiding pushes to the back; showing takes the first matching tile from the front.
     hidden: VecDeque<Tile<W>>,
     /// Sequence number for the next shown tile, used to find the most recently shown one.
-    #[allow(dead_code)] // Used in the following commits.
     next_seq: u64,
 }
 
@@ -1636,6 +1648,12 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        // Activating never hides a scratchpad window, only shows it.
+        if self.is_scratchpad_hidden(window) {
+            self.scratchpad_show(window, true);
+            return;
+        }
+
         let MonitorSet::Normal {
             monitors,
             active_monitor_idx,
@@ -1670,6 +1688,10 @@ impl<W: LayoutElement> Layout<W> {
             if move_.tile.window().id() == window {
                 return;
             }
+        }
+
+        if self.is_scratchpad_hidden(window) {
+            return;
         }
 
         let MonitorSet::Normal {
@@ -3436,6 +3458,225 @@ impl<W: LayoutElement> Layout<W> {
             .hidden
             .iter()
             .any(|tile| tile.window().id() == window)
+    }
+
+    pub fn scratchpad_hidden_windows(&self) -> impl Iterator<Item = &W> {
+        self.scratchpad.hidden.iter().map(|tile| tile.window())
+    }
+
+    /// Returns whether the window is in the scratchpad and shown, possibly being moved.
+    fn is_scratchpad_shown(&self, window: &W::Id) -> bool {
+        if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
+            if move_.tile.window().id() == window {
+                return move_.tile.in_scratchpad;
+            }
+        }
+
+        self.workspaces()
+            .flat_map(|(_, _, ws)| ws.tiles())
+            .any(|tile| tile.window().id() == window && tile.in_scratchpad)
+    }
+
+    /// Shows a hidden scratchpad window on the active workspace.
+    ///
+    /// Returns `false` if the window isn't hidden in the scratchpad, or if there are no outputs.
+    fn scratchpad_show(&mut self, window: &W::Id, activate: bool) -> bool {
+        let MonitorSet::Normal {
+            monitors,
+            active_monitor_idx,
+            ..
+        } = &mut self.monitor_set
+        else {
+            return false;
+        };
+
+        let Some(idx) = self
+            .scratchpad
+            .hidden
+            .iter()
+            .position(|tile| tile.window().id() == window)
+        else {
+            return false;
+        };
+        let mut tile = self.scratchpad.hidden.remove(idx).unwrap();
+
+        set_tile_scratchpad(&mut tile, ScratchpadState::Shown);
+        tile.scratchpad_shown_seq = self.scratchpad.next_seq;
+        self.scratchpad.next_seq += 1;
+
+        let mon = &mut monitors[*active_monitor_idx];
+        let ws_idx = mon.active_workspace_idx;
+        let ws = &mut mon.workspaces[ws_idx];
+        ws.add_scratchpad_tile(tile, activate, true);
+        ws.start_open_animation(window);
+        mon.ensure_empty_workspaces_after_add(ws_idx);
+
+        true
+    }
+
+    /// Toggles the scratchpad windows that match the filter.
+    ///
+    /// Goes through these rules in order and stops at the first one that applies:
+    ///
+    /// 1. If the focused window is a shown scratchpad window, hide it.
+    /// 2. If the active workspace has shown scratchpad windows, focus the most recently shown one.
+    /// 3. If some other workspace has shown scratchpad windows, move the most recently shown one to
+    ///    the active workspace and focus it.
+    /// 4. If there are hidden scratchpad windows, show the first one from the queue.
+    pub fn toggle_scratchpad(&mut self, filter: impl Fn(&W) -> bool) -> ScratchpadToggle<W::Id> {
+        if !matches!(self.monitor_set, MonitorSet::Normal { .. }) {
+            return ScratchpadToggle::Nothing;
+        }
+
+        // 1. Hide the focused shown window.
+        if let Some(win) = self.focus() {
+            let id = win.id().clone();
+            if filter(win) && self.is_scratchpad_shown(&id) {
+                return match self.move_to_scratchpad(Some(&id)) {
+                    Some(id) => ScratchpadToggle::Hidden(id),
+                    None => ScratchpadToggle::Nothing,
+                };
+            }
+        }
+
+        let MonitorSet::Normal {
+            monitors,
+            active_monitor_idx,
+            ..
+        } = &self.monitor_set
+        else {
+            unreachable!()
+        };
+        let active_mon_idx = *active_monitor_idx;
+
+        let most_recent = |tiles: &mut dyn Iterator<Item = &Tile<W>>| {
+            tiles
+                .filter(|tile| tile.in_scratchpad && filter(tile.window()))
+                .max_by_key(|tile| tile.scratchpad_shown_seq)
+                .map(|tile| (tile.window().id().clone(), tile.scratchpad_shown_seq))
+        };
+
+        // 2. Focus the most recently shown window on the active workspace.
+        let active_mon = &monitors[active_mon_idx];
+        let active_ws = &active_mon.workspaces[active_mon.active_workspace_idx];
+        let on_active = most_recent(&mut active_ws.floating().tiles());
+        if let Some((id, _)) = on_active {
+            self.activate_window(&id);
+            return ScratchpadToggle::Focused(id);
+        }
+
+        // 3. Bring over the most recently shown window from elsewhere.
+        let mut elsewhere = None;
+        for (mon_idx, mon) in monitors.iter().enumerate() {
+            for (ws_idx, ws) in mon.workspaces.iter().enumerate() {
+                if mon_idx == active_mon_idx && ws_idx == mon.active_workspace_idx {
+                    continue;
+                }
+
+                if let Some((id, seq)) = most_recent(&mut ws.floating().tiles()) {
+                    if elsewhere.as_ref().is_none_or(|(_, max_seq)| *max_seq < seq) {
+                        elsewhere = Some((id, seq));
+                    }
+                }
+            }
+        }
+        if let Some((id, _)) = elsewhere {
+            if self.has_visible_child(&id) {
+                // Moving it away would leave its dialogs behind.
+                self.activate_window(&id);
+                return ScratchpadToggle::Focused(id);
+            }
+
+            self.scratchpad_bring_to_active_workspace(&id);
+            return ScratchpadToggle::Shown(id);
+        }
+
+        // 4. Show the first matching hidden window.
+        let hidden = self
+            .scratchpad
+            .hidden
+            .iter()
+            .map(|tile| tile.window())
+            .find(|win| filter(win))
+            .map(|win| win.id().clone());
+        if let Some(id) = hidden {
+            self.scratchpad_show(&id, true);
+            return ScratchpadToggle::Shown(id);
+        }
+
+        debug!("no scratchpad window to toggle");
+        ScratchpadToggle::Nothing
+    }
+
+    /// Moves a shown scratchpad window from another workspace to the active workspace.
+    fn scratchpad_bring_to_active_workspace(&mut self, window: &W::Id) {
+        let MonitorSet::Normal {
+            monitors,
+            active_monitor_idx,
+            ..
+        } = &mut self.monitor_set
+        else {
+            return;
+        };
+
+        let Some((source_ws_id, removed)) = monitors
+            .iter_mut()
+            .flat_map(|mon| mon.workspaces.iter_mut())
+            .find(|ws| ws.has_window(window))
+            .map(|ws| (ws.id(), ws.remove_tile(window, Transaction::new())))
+        else {
+            return;
+        };
+
+        let mut tile = removed.tile;
+        // Count this as showing the window.
+        tile.scratchpad_shown_seq = self.scratchpad.next_seq;
+        self.scratchpad.next_seq += 1;
+
+        let mon = &mut monitors[*active_monitor_idx];
+        let ws_idx = mon.active_workspace_idx;
+        mon.workspaces[ws_idx].add_scratchpad_tile(tile, true, true);
+        mon.ensure_empty_workspaces_after_add(ws_idx);
+
+        for mon in monitors {
+            if let Some(idx) = mon.idx_of_ws(source_ws_id) {
+                mon.clean_up_workspace_after_removal(idx);
+                break;
+            }
+        }
+    }
+
+    /// Takes a window out of the scratchpad, leaving it as a regular floating window.
+    ///
+    /// A hidden window is shown on the active workspace first.
+    pub fn remove_from_scratchpad(&mut self, window: Option<&W::Id>) {
+        let id = match window {
+            Some(id) => id.clone(),
+            None => match self.focus() {
+                Some(win) => win.id().clone(),
+                None => return,
+            },
+        };
+
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
+            if move_.tile.window().id() == &id {
+                if move_.tile.in_scratchpad {
+                    set_tile_scratchpad(&mut move_.tile, ScratchpadState::None);
+                }
+                return;
+            }
+        }
+
+        if self.is_scratchpad_hidden(&id) && !self.scratchpad_show(&id, true) {
+            // No outputs to show the window on.
+            return;
+        }
+
+        for ws in self.workspaces_mut() {
+            if ws.clear_scratchpad(&id) {
+                return;
+            }
+        }
     }
 
     /// Returns whether the window has any children outside the scratchpad hidden queue.

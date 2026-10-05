@@ -82,11 +82,9 @@ pub struct Tile<W: LayoutElement> {
     pub(super) floating_preset_height_idx: Option<usize>,
 
     /// Whether the tile is in the scratchpad (hidden or shown).
-    #[allow(dead_code)] // Used in the following commits.
     pub(super) in_scratchpad: bool,
 
     /// Sequence number of the last time this tile was shown from the scratchpad.
-    #[allow(dead_code)] // Used in the following commits.
     pub(super) scratchpad_shown_seq: u64,
 
     /// The animation upon opening a window.
