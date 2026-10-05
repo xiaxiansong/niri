@@ -990,6 +990,7 @@ M5 的详细设计见 §9（满足本节全部约束）。
 | F13 | `toggle_overview_to_workspace()` 的切换与缩放用同一配置、同时开始，正常同时结束。Overview 动画结束时 `overview_progress` 变 None；`Monitor::set_overview_progress()` 每帧都会被调用（值可能不变） | `mod.rs` 约 5378、3005；`monitor.rs` 约 1467 |
 | F14 | 开窗动画默认：alpha = p，缩放 = p/2 + 0.5；关窗动画默认：alpha = 1 − p，缩放 = (1 − p)/5 + 0.8。两者不对称；custom-shader 分别是 Open/Close 两个程序 | `opening_window.rs`、`closing_window.rs` |
 | F15 | 关窗快照：niri 层 `State::store_unmap_snapshot()`（GlesRenderer + xray）把快照存进 Tile；`ClosingWindow::new()` 立即渲染为纹理 | `niri.rs` 约 2257、`closing_window.rs` |
+| F17 | 浮动层的 working area 就是 `Workspace.working_area` = 输出的 layer-shell 非独占区（`compute_working_area()`），配置里的 struts 不计入（只影响平铺层）。同一输出上所有工作区的浮动 working area 恒相同（M5a 实现时发现） | `workspace.rs` 约 2235 |
 | F16 | 布局测试与客户端测试都没有渲染器，渲染元素不可断言；可断言的是几何函数、`window_under()` / `resize_edges_under()` / 拖动起点的结果 | — |
 
 ### 9.2 M5a 钉住渲染
@@ -1041,12 +1042,13 @@ pub fn scratchpad_pin_geo(&self) -> Option<Rectangle<f64, Logical>>
 
 #### 9.2.4 跟随时以屏幕位置优先
 
-源、目标工作区 layout 覆盖不同（struts 等）时 working area 不同，按比例恢复会让窗口在屏幕上跳动。规则：
+§8 要求源、目标工作区 layout 覆盖不同时以屏幕位置优先。按 F17，同一输出上所有工作区的浮动 working area 恒相同，比例位置换算出的逻辑位置也相同，所以跟随、P5 的取出与加入（都在同一输出上）天然保持屏幕位置，无需代码。
 
-- `Workspace::take_shown_scratchpad_tiles()` 返回 `Vec<TakenScratchpadTile<W>>`（新增结构体，字段：`tile`、`was_focused`、`pos`：取出前的 `Data.logical_pos`、`working_area`：源工作区的 working area）。
-- 加入目标前：`if taken.working_area != ws.working_area() { tile.floating_pos = Some(ws.floating_logical_to_size_frac(taken.pos)) }`；相同时比例保持原值（逐位不变，现有测试不受影响）。
-- 手势中窗口留在源工作区（钉住画），松手跟随时按上条换算，所以松手前后屏幕位置相同（“松手后修正比例位置”）。
-- 已知细节：边框宽度覆盖不同时窗口内容会移动“边框差”；新位置若超出夹紧范围（F12）会被夹回。
+- 手势中窗口留在源工作区（钉住画），松手跟随后逻辑位置不变，所以松手前后屏幕位置相同。
+- 已知细节：边框宽度覆盖不同时 Tile 尺寸不同，窗口内容会移动“边框差”。
+- 修订记录：原设计按 working area 是否不同做换算（`TakenScratchpadTile.working_area`），实现后反向验证发现该分支永远不会触发（F17），经用户同意删除。
+
+`Workspace::take_shown_scratchpad_tiles()` 返回 `Vec<TakenScratchpadTile<W>>`（字段：`tile`、`was_focused`、`pos`：取出前的 `Data.logical_pos`，供 §9.2.5 P3 使用）。
 
 `Monitor::scratchpad_follow()` 拆为“收集”与新增的 `Monitor::add_shown_scratchpad_tiles(&mut self, tiles: Vec<TakenScratchpadTile<W>>)`（从下到上加入活动工作区、上述换算、`ensure_empty_workspaces_after_add`、无切换时 `clean_up_workspaces()`，即原函数后半段），供 §9.2.6 复用。
 
@@ -1086,7 +1088,7 @@ pub fn scratchpad_pin_geo(&self) -> Option<Rectangle<f64, Logical>>
 | 4 | Overview 打开 / 动画中 | pin geo 为 None；命中为 Activate |
 | 5 | 目标工作区焦点为平铺全屏、暂存窗口未聚焦（P2） | 切换中暂存窗口中心命中全屏窗口 |
 | 6 | 切换中 `resize_edges_under`、`interactive_move_begin`（再 `InteractiveMoveUpdate` 越过阈值） | 边按钉住位置得出；拖动窗口渲染位置与钉住位置一致 |
-| 7 | 源、目标 struts 不同 / 相同 | 逻辑位置不变 / `floating_pos` 逐位不变 |
+| 7 | 跟随到同一输出的另一工作区 | 逻辑位置不变（回归保护；按 F17 不需要换算） |
 | 8 | Overview 中键盘切换（P3） | Tile 有跨工作区移动动画；切换前后视觉位置连续；完成后在新工作区原位置 |
 | 9 | 切换动画中打开 Overview；Overview 关闭动画先于切换结束（P4） | 翻转前后视觉位置连续 |
 | 10 | 插入显示器、`move-workspace-to-monitor`（P5） | 窗口留在原显示器活动工作区，焦点、空工作区不变量正确 |
@@ -1158,7 +1160,7 @@ pub struct HidingWindow<Id> {
 | M5a-1 | `layout: Extract workspace static offset`（纯重构，若 9.2.1 需要） | 现有测试与快照零变化 |
 | M5a-2 | `layout: Pin shown scratchpad windows during workspace switches`（pin geo、RenderLayer、渲染与渲染元素更新） | 编译、现有测试不变 |
 | M5a-3 | `layout: Hit-test pinned scratchpad windows at their pinned position`（命中、缩放边、拖动起点） | |
-| M5a-4 | `layout: Keep screen position of scratchpad windows following to another workspace`（含 `TakenScratchpadTile`、`add_shown_scratchpad_tiles`） | 现有测试不变 |
+| M5a-4 | `layout: Keep screen position of scratchpad windows following to another workspace`（含 `TakenScratchpadTile`、`add_shown_scratchpad_tiles`）；换算部分随后按 F17 删除 | 现有测试不变 |
 | M5a-5 | `layout: Animate scratchpad windows following in the overview`（P3） | |
 | M5a-6 | `layout: Hand pinned scratchpad windows over to the overview`（P4） | |
 | M5a-7 | `layout: Keep shown scratchpad windows on their output when workspaces move away`（P5，同一提交更新 M4 用例期望值并说明） | |
