@@ -151,6 +151,7 @@ use crate::layout::tile::TileRenderElement;
 use crate::layout::workspace::{Workspace, WorkspaceId};
 use crate::layout::{
     HitType, Layout, LayoutElement as _, LayoutElementRenderElement, MonitorRenderElement,
+    ScratchpadToggle,
 };
 use crate::niri_render_elements;
 use crate::protocols::ext_workspace::{self, ExtWorkspaceManagerState};
@@ -1102,6 +1103,81 @@ impl State {
         }
 
         // FIXME: granular
+        self.niri.queue_redraw_all();
+    }
+
+    /// Moves the cursor after a scratchpad action focused a window, like `focus_window()`.
+    pub fn move_cursor_after_scratchpad_focus(&mut self, prev_active_output: Option<Output>) {
+        let new_active = self.niri.layout.active_output().cloned();
+        if new_active != prev_active_output {
+            if !self.maybe_warp_cursor_to_focus_centered() {
+                self.move_cursor_to_output(&new_active.unwrap());
+            }
+        } else {
+            self.maybe_warp_cursor_to_focus();
+        }
+    }
+
+    pub fn toggle_scratchpad(&mut self, filter: impl Fn(&Mapped) -> bool) {
+        let active_output = self.niri.layout.active_output().cloned();
+
+        match self.niri.layout.toggle_scratchpad(filter) {
+            ScratchpadToggle::Hidden(window) => self.on_window_hidden_to_scratchpad(&window),
+            ScratchpadToggle::Focused(_) | ScratchpadToggle::Shown(_) => {
+                self.move_cursor_after_scratchpad_focus(active_output);
+            }
+            ScratchpadToggle::Nothing => (),
+        }
+
+        // FIXME: granular
+        self.niri.queue_redraw_all();
+    }
+
+    /// Cleans up after a window was hidden in the scratchpad.
+    pub fn on_window_hidden_to_scratchpad(&mut self, window: &Window) {
+        let Some((id, surface)) = self
+            .niri
+            .layout
+            .windows()
+            .find(|(_, mapped)| mapped.window == *window)
+            .map(|(_, mapped)| (mapped.id(), mapped.toplevel().wl_surface().clone()))
+        else {
+            return;
+        };
+
+        self.niri
+            .stop_casts_for_target(CastTarget::Window { id: id.get() });
+
+        // Hidden windows are not rendered, so clear their primary scanout output right away
+        // rather than waiting for the next redraw. This releases idle inhibitors and stops
+        // frame callbacks at the output refresh rate.
+        //
+        // This must come before dismissing the popups which removes them from the popup tree.
+        let states = RenderElementStates::default();
+        for output in self.niri.global_space.outputs() {
+            window.with_surfaces(|surface, surface_states| {
+                let primary_scanout_output = surface_states
+                    .data_map
+                    .get_or_insert_threadsafe(Mutex::<PrimaryScanoutOutput>::default);
+                primary_scanout_output
+                    .lock()
+                    .unwrap()
+                    .update_from_render_element_states(
+                        Id::from_wayland_resource(surface),
+                        output,
+                        None,
+                        &states,
+                        |_, _, output, _| output,
+                    );
+            });
+        }
+
+        for (popup, _) in PopupManager::popups_for_surface(&surface) {
+            let _ = PopupManager::dismiss_popup(&surface, &popup);
+        }
+
+        self.niri.window_mru_ui.remove_window(id);
+
         self.niri.queue_redraw_all();
     }
 

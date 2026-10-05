@@ -53,7 +53,7 @@ use crate::niri::{CastTarget, PointerVisibility, State};
 use crate::ui::mru::{WindowMru, WindowMruUi};
 use crate::ui::screenshot_ui::ScreenshotUi;
 use crate::utils::spawning::{spawn, spawn_sh};
-use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
+use crate::utils::{center, get_monotonic_time, with_toplevel_role, CastSessionId, ResizeEdge};
 
 pub mod backend_ext;
 pub mod click_grab;
@@ -2212,6 +2212,59 @@ impl State {
                 self.maybe_warp_cursor_to_focus();
                 // FIXME: granular
                 self.niri.queue_redraw_all();
+            }
+            Action::MoveWindowToScratchpad => {
+                if let Some(window) = self.niri.layout.move_to_scratchpad(None) {
+                    self.on_window_hidden_to_scratchpad(&window);
+                }
+                // FIXME: granular
+                self.niri.queue_redraw_all();
+            }
+            Action::MoveWindowToScratchpadById(id) => {
+                let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
+                let window = window.map(|(_, m)| m.window.clone());
+                if let Some(window) = window {
+                    if let Some(window) = self.niri.layout.move_to_scratchpad(Some(&window)) {
+                        self.on_window_hidden_to_scratchpad(&window);
+                    }
+                    // FIXME: granular
+                    self.niri.queue_redraw_all();
+                }
+            }
+            Action::ScratchpadShow(app_id) => {
+                self.toggle_scratchpad(|mapped| {
+                    app_id.as_ref().is_none_or(|re| {
+                        with_toplevel_role(mapped.toplevel(), |role| {
+                            role.app_id.as_deref().is_some_and(|x| re.0.is_match(x))
+                        })
+                    })
+                });
+            }
+            Action::ScratchpadShowById(id) => {
+                self.toggle_scratchpad(|mapped| mapped.id().get() == id);
+            }
+            Action::RemoveWindowFromScratchpad => {
+                self.niri.layout.remove_from_scratchpad(None);
+                // FIXME: granular
+                self.niri.queue_redraw_all();
+            }
+            Action::RemoveWindowFromScratchpadById(id) => {
+                let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
+                let window = window.map(|(_, m)| m.window.clone());
+                if let Some(window) = window {
+                    let active_output = self.niri.layout.active_output().cloned();
+                    let was_hidden = self.niri.layout.is_scratchpad_hidden(&window);
+
+                    self.niri.layout.remove_from_scratchpad(Some(&window));
+
+                    // A hidden window gets shown and focused.
+                    if was_hidden && !self.niri.layout.is_scratchpad_hidden(&window) {
+                        self.move_cursor_after_scratchpad_focus(active_output);
+                    }
+
+                    // FIXME: granular
+                    self.niri.queue_redraw_all();
+                }
             }
             Action::MoveFloatingWindowById { id, x, y } => {
                 let window = if let Some(id) = id {

@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::{env, io, process};
 
@@ -14,6 +15,7 @@ use calloop::io::Async;
 use directories::BaseDirs;
 use futures_util::io::{AsyncReadExt, BufReader};
 use futures_util::{select_biased, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, FutureExt as _};
+use niri_config::utils::RegexEq;
 use niri_config::OutputName;
 use niri_ipc::state::{EventStreamState, EventStreamStatePart as _};
 use niri_ipc::{
@@ -481,6 +483,18 @@ fn validate_action(action: &Action) -> Result<(), String> {
         let p = Path::new(path);
         if !p.is_file() {
             return Err(format!("path does not point to a file: {path}"));
+        }
+    }
+
+    if let Action::ScratchpadShow { id, app_id } = action {
+        if id.is_some() && app_id.is_some() {
+            return Err(String::from("id and app-id are mutually exclusive"));
+        }
+
+        if let Some(app_id) = app_id {
+            if let Err(err) = RegexEq::from_str(app_id) {
+                return Err(format!("invalid app-id regex: {err}"));
+            }
         }
     }
 

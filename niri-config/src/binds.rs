@@ -14,7 +14,7 @@ use smithay::input::keyboard::xkb::{keysym_from_name, KEYSYM_CASE_INSENSITIVE, K
 use smithay::input::keyboard::Keysym;
 
 use crate::recent_windows::{MruDirection, MruFilter, MruScope};
-use crate::utils::{expect_only_children, MergeWith};
+use crate::utils::{expect_only_children, MergeWith, RegexEq};
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Binds(pub Vec<Bind>);
@@ -346,6 +346,15 @@ pub enum Action {
     FocusFloating,
     FocusTiling,
     SwitchFocusBetweenFloatingAndTiling,
+    MoveWindowToScratchpad,
+    #[knuffel(skip)]
+    MoveWindowToScratchpadById(u64),
+    ScratchpadShow(#[knuffel(property(name = "app-id"), str)] Option<RegexEq>),
+    #[knuffel(skip)]
+    ScratchpadShowById(u64),
+    RemoveWindowFromScratchpad,
+    #[knuffel(skip)]
+    RemoveWindowFromScratchpadById(u64),
     #[knuffel(skip)]
     MoveFloatingWindowById {
         id: Option<u64>,
@@ -684,6 +693,27 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::FocusTiling {} => Self::FocusTiling,
             niri_ipc::Action::SwitchFocusBetweenFloatingAndTiling {} => {
                 Self::SwitchFocusBetweenFloatingAndTiling
+            }
+            niri_ipc::Action::MoveWindowToScratchpad { id: None } => Self::MoveWindowToScratchpad,
+            niri_ipc::Action::MoveWindowToScratchpad { id: Some(id) } => {
+                Self::MoveWindowToScratchpadById(id)
+            }
+            niri_ipc::Action::ScratchpadShow { id: Some(id), .. } => Self::ScratchpadShowById(id),
+            niri_ipc::Action::ScratchpadShow { id: None, app_id } => {
+                Self::ScratchpadShow(app_id.map(|app_id| {
+                    RegexEq::from_str(&app_id).unwrap_or_else(|err| {
+                        // The IPC server validates the regex, so this shouldn't happen. Never
+                        // match rather than falling back to matching every window.
+                        warn!("invalid app-id regex: {err}");
+                        RegexEq::from_str(r"[^\s\S]").unwrap()
+                    })
+                }))
+            }
+            niri_ipc::Action::RemoveWindowFromScratchpad { id: None } => {
+                Self::RemoveWindowFromScratchpad
+            }
+            niri_ipc::Action::RemoveWindowFromScratchpad { id: Some(id) } => {
+                Self::RemoveWindowFromScratchpadById(id)
             }
             niri_ipc::Action::MoveFloatingWindow { id, x, y } => {
                 Self::MoveFloatingWindowById { id, x, y }

@@ -837,6 +837,49 @@ pub enum Action {
     FocusTiling {},
     /// Toggles the focus between the floating and the tiling layout.
     SwitchFocusBetweenFloatingAndTiling {},
+    /// Hide a window in the scratchpad.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Hide the focused window in the scratchpad")
+    )]
+    MoveWindowToScratchpad {
+        /// Id of the window to hide.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Show, focus or hide a scratchpad window.
+    ///
+    /// If the focused window is a shown scratchpad window, hides it. Otherwise, focuses a shown
+    /// scratchpad window, or shows the first hidden one.
+    ScratchpadShow {
+        /// Id of the scratchpad window to act on.
+        ///
+        /// If `None`, any scratchpad window can be used.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+
+        /// Regular expression for the app ID of the scratchpad windows to act on.
+        ///
+        /// Cannot be used together with `id`.
+        #[cfg_attr(feature = "clap", arg(long))]
+        app_id: Option<String>,
+    },
+    /// Take a window out of the scratchpad.
+    ///
+    /// A hidden window is shown on the focused workspace first. The window remains floating.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Take the focused window out of the scratchpad")
+    )]
+    RemoveWindowFromScratchpad {
+        /// Id of the window to take out.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
     /// Move a floating window on screen.
     #[cfg_attr(feature = "clap", clap(about = "Move the floating window on screen"))]
     MoveFloatingWindow {
