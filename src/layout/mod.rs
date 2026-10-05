@@ -438,6 +438,12 @@ struct InteractiveMoveData<W: LayoutElement> {
     pub(self) is_full_width: bool,
     /// Whether the window targets the floating layout.
     pub(self) is_floating: bool,
+    /// Workspace where the move originated from.
+    pub(self) source_workspace: Option<WorkspaceId>,
+    /// Whether the window was in the scrolling layout when the move started.
+    ///
+    /// Used to fill the view on the source workspace once the window is dropped.
+    pub(self) source_was_tiled: bool,
     /// Pointer location within the visual window geometry as ratio from geometry size.
     ///
     /// This helps the pointer remain inside the window as it resizes.
@@ -1188,6 +1194,15 @@ impl<W: LayoutElement> Layout<W> {
                         // Unlock the view on the workspaces.
                         for ws in self.workspaces_mut() {
                             ws.dnd_scroll_gesture_end();
+                        }
+
+                        if fill_view && move_.source_was_tiled {
+                            if let Some(ws) = self
+                                .workspaces_mut()
+                                .find(|ws| Some(ws.id()) == move_.source_workspace)
+                            {
+                                ws.fill_view_after_removal();
+                            }
                         }
 
                         return Some(RemovedTile {
@@ -3944,12 +3959,13 @@ impl<W: LayoutElement> Layout<W> {
                 }
                 .band(sq_dist / INTERACTIVE_MOVE_START_THRESHOLD);
 
-                let (is_floating, tile, workspace_config) = self
+                let (source_workspace, is_floating, tile, workspace_config) = self
                     .workspaces_mut()
                     .find(|ws| ws.has_window(&window_id))
                     .map(|ws| {
                         let workspace_config = ws.layout_config().cloned().map(|c| (ws.id(), c));
                         (
+                            ws.id(),
                             ws.is_floating(&window_id),
                             ws.tiles_mut()
                                 .find(|tile| *tile.window().id() == window_id)
@@ -4003,6 +4019,9 @@ impl<W: LayoutElement> Layout<W> {
                 // Clear it before calling remove_window() to avoid running interactive_move_end()
                 // in the middle of interactive_move_update() and the confusion that causes.
                 self.interactive_move = None;
+
+                // Record this before unfullscreening, which can move the window to floating.
+                let source_was_tiled = !is_floating;
 
                 // Unset fullscreen before removing the tile. This will restore its size properly,
                 // and move it to floating if needed, so we don't have to deal with that here.
@@ -4063,6 +4082,8 @@ impl<W: LayoutElement> Layout<W> {
                     width,
                     is_full_width,
                     is_floating,
+                    source_workspace: Some(source_workspace),
+                    source_was_tiled,
                     pointer_ratio_within_window,
                     output_config,
                     workspace_config,
@@ -4397,6 +4418,17 @@ impl<W: LayoutElement> Layout<W> {
                     move_.is_floating,
                     None,
                 );
+            }
+        }
+
+        // Fill the view on the source workspace only now, after the window was put back. When
+        // dropped onto the same workspace, filling before that would move the view twice.
+        if move_.source_was_tiled {
+            if let Some(ws) = self
+                .workspaces_mut()
+                .find(|ws| Some(ws.id()) == move_.source_workspace)
+            {
+                ws.fill_view_after_removal();
             }
         }
     }
