@@ -563,11 +563,12 @@ pub fn scratchpad_follow(&mut self) {
     // 2. 若为空则返回。
     // 3. 按从下到上的顺序：active_ws.add_scratchpad_tile(tile, was_focused, /*enter_output*/ false)。
     // 4. self.ensure_empty_workspaces_after_add(active_workspace_idx)（可能使 active_workspace_idx +1）。
+    // 5. if self.workspace_switch.is_none() { self.clean_up_workspaces(); }
 }
 ```
 
 - 幂等、不调用 `activate_workspace*`，所以不会递归。
-- 源工作区搬空后，由现有 `clean_up_workspaces()` 在切换动画结束时清理（`monitor.rs` 约 690 行）。
+- 源工作区搬空后：有切换动画/手势时，由现有 `clean_up_workspaces()` 在切换结束时清理（`monitor.rs` 约 690 行）；没有切换时（`append_workspaces()`、`add_output()` / `remove_output()`、`refresh()` 兜底等调用点）由第 5 步立即清理，否则违反现有不变量“无切换时不能有非活动、非末尾、空且无名的工作区”（M4 开始时发现）。`clean_up_workspaces()` 只重新编号，与陷阱 7 不冲突。
 - 不修改 `original_outputs`。
 - 只有暂存窗口的工作区算作普通非空工作区，这与 niri 的模型一致。副作用是：有显示中的暂存窗口时，切到底部空工作区会使其变为非空并新增一个空工作区。这是预期行为，写入用户文档。
 
@@ -579,6 +580,7 @@ pub fn scratchpad_follow(&mut self) {
 | `Monitor::workspace_switch_gesture_end()` 设置 `active_workspace_idx` 之后（约 2078 行） | 手势切换不经过上一个函数 |
 | `Monitor::append_workspaces()` 末尾 | 输出插拔导致活动工作区变化 |
 | `Layout::add_output()`、`Layout::remove_output()` 末尾，对所有显示器 | 工作区在显示器间迁移；被拔显示器上的显示窗口随工作区迁移后，搬到接收显示器的活动工作区 |
+| `Monitor::insert_workspace()` 末尾 | `move-workspace-to-monitor` 移动**未聚焦显示器的活动工作区**时 `activate` 为 false，工作区作为非活动工作区插入目标显示器；显示中的窗口随工作区到目标显示器，再跟随到其活动工作区（M4 开始时补入） |
 | `Layout::refresh()` 末尾，对所有显示器 | 兜底 |
 
 实现者还需 `grep -n "active_workspace_idx = \|active_workspace_idx -= \|active_workspace_idx += " src/layout/{monitor,mod}.rs`，逐个判断是“重新编号（同一工作区）”还是“活动工作区真的变了”，后者补调用。由 `verify_invariants` 的第 4 条兜住遗漏（§4.11）。
@@ -732,10 +734,12 @@ layout {
 
 binds {
     // 切换类动作建议关闭按键重复，避免按住时快速闪烁
-    Mod+Shift+Minus repeat=false { move-window-to-scratchpad; }
-    Mod+Minus       repeat=false { scratchpad-show; }
-    Mod+Grave       repeat=false { scratchpad-show app-id="^dropdown$"; }
-    Mod+M           repeat=false { scratchpad-show app-id="^(Spotify|spotify)$"; }
+    // 示例按键均不与默认配置冲突（M4 开始时由 Minus/M 改为 Z/Shift+M）
+    Mod+Shift+Z repeat=false { move-window-to-scratchpad; }
+    Mod+Z       repeat=false { scratchpad-show; }
+    Mod+Ctrl+Z  repeat=false { remove-window-from-scratchpad; }
+    Mod+Grave   repeat=false { scratchpad-show app-id="^dropdown$"; }
+    Mod+Shift+M repeat=false { scratchpad-show app-id="^(Spotify|spotify)$"; }
 }
 
 window-rule {
@@ -875,7 +879,7 @@ M3 补充说明：
 - 未被用例覆盖：D15（动态录屏目标只写进进行中的录屏，需要 PipeWire）、副作用中的停止录屏、关闭弹出菜单（测试客户端不支持 xdg_popup）、MRU 删缩略图、光标处理。
 - 反向验证（逐个去掉后确认对应用例失败，再从 git 还原）：`changed` 中的两个新字段、`make_ipc_window` 的 `is_scratchpad_hidden`、副作用入口的清缓存、C2 的 `chain`、D14、D16、`find_window_and_output_mut()` 与 `find_window_and_output()` 的隐藏分支（前者失败时收集到的正是 “pre-commit hook for mapped surfaces must be removed upon unmapping”）。
 - wiki（`Configuration:-Key-Bindings.md`、`IPC.md`）用英文，与功能一的 wiki 一致，提交信息 `wiki: …`。KDL 示例经 `wiki-parses` 测试解析。
-- 发现：§5.1 / wiki 示例的 `Mod+Minus`、`Mod+Shift+Minus` 与默认配置的 `set-column-width` / `set-window-height` 冲突，照抄进默认配置会报重复绑定（wiki 示例单独解析不受影响）。
+- 发现：§5.1 / wiki 示例的 `Mod+Minus`、`Mod+Shift+Minus` 与默认配置的 `set-column-width` / `set-window-height` 冲突，照抄进默认配置会报重复绑定（wiki 示例单独解析不受影响）；`Mod+M` 同样与 `maximize-window-to-edges` 冲突。M4 开始时经用户同意，§5.1 改为 Z 系列与 `Mod+Shift+M`，wiki 随 M4 的文档提交一起改。
 - 发现：`Niri::mru_apply_keyboard_commit()` 只遍历工作区。窗口在焦点防抖期间被隐藏时，待提交的焦点时间戳会被丢弃；无害，未改。
 - 嵌套冒烟测试（ghostty，经嵌套 niri 的 IPC 驱动）：隐藏平铺/浮动窗口、`--app-id` 选择器呈现与再隐藏、通用键 A→B→A 轮换、平铺窗口首次呈现为工作区 60%、D13 与无效正则的错误信息、`remove-window-from-scratchpad`（Shown 与按 id 的 Hidden）、`focus-window --id` 呈现隐藏窗口、`focus-window-previous` 不选隐藏窗口、`close-window --id` 关闭隐藏窗口、事件流中 Shown→None 的事件、截图确认 dropdown 位置。日志无 ERROR、无 panic。未做（需人工）：弹出菜单、真实程序的对话框、MRU 打开时隐藏、视频播放器息屏、DMS 任务栏、多显示器。
 - 风险（未验证）：libadwaita 等在窗口内部绘制的对话框不是子 toplevel，D10 无法据此呈现父窗口；程序在隐藏窗口里弹出这类确认框时，窗口会保持隐藏。手动测试时留意。
