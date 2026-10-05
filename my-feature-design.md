@@ -599,7 +599,7 @@ grep 结果（M4 核对，行号为 M4 开始时）：
 | `insert_workspace()`（约 775） | 插入位置不激活时重新编号；工作区本身可能带显示中的窗口 | 末尾调用 |
 | `append_workspaces()`（约 815） | 真的变了 | 末尾调用 |
 | `update_config()` 去掉首个空工作区（约 1241） | 重新编号 | 无 |
-| `move_workspace_to_idx()`（约 1374–1380） | 重新编号 | 无 |
+| `move_workspace_to_idx()`（约 1374–1380） | 原判断为重新编号。**M5a 随机测试发现错误**：`empty-workspace-above-first` 下移到第 0 位时 `add_workspace_top()` 经 `add_workspace_at()` 先改了 `active_workspace_idx`，之后的“原来是否活动 / 是否越过活动工作区”判断混用了平移前后的下标，活动工作区会落到别的（空）工作区，暂存窗口不跟随，违反不变量 4（release 中由 `refresh()` 兜底，下一帧修正） | 经用户同意两者都做：修上游 bug（修改前记下活动工作区 id，结束时按 id 找回下标，即“活动工作区保持为同一个工作区”，与上游三个分支的本意相同）；末尾再调用 `scratchpad_follow()` 兜底。这是对上游行为的有意修正（偏离 §1.3 原则 1，仅限该边界情况），可另行报告上游 |
 | `workspace_switch_gesture_end()`（约 2120） | 真的变了 | 末尾调用 |
 | `mod.rs` `add_output()` 中源显示器的 `saturating_sub`（约 870，grep 匹配不到 `source.active_workspace_idx =` 换行写法） | 真的变了 | `add_output()` 末尾对所有显示器调用 |
 
