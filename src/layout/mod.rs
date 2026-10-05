@@ -1029,7 +1029,7 @@ impl<W: LayoutElement> Layout<W> {
     pub fn add_window(
         &mut self,
         window: W,
-        target: AddWindowTarget<W>,
+        mut target: AddWindowTarget<W>,
         width: Option<PresetSize>,
         height: Option<PresetSize>,
         is_full_width: bool,
@@ -1038,6 +1038,16 @@ impl<W: LayoutElement> Layout<W> {
     ) -> Option<&Output> {
         let scrolling_height = height.map(SizeChange::from);
         let id = window.id().clone();
+
+        // Show a hidden scratchpad parent so that its new dialog doesn't appear on its own.
+        if let AddWindowTarget::NextTo(next_to) = target {
+            if self.is_scratchpad_hidden(next_to)
+                && !self.scratchpad_show(next_to, !matches!(activate, ActivateWindow::No))
+            {
+                // There are no outputs to show the parent on.
+                target = AddWindowTarget::Auto;
+            }
+        }
 
         match &mut self.monitor_set {
             MonitorSet::Normal {
