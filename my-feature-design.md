@@ -837,7 +837,8 @@ fi
 | M2b | 暂存区 Layout 核心（下）：§4.5.7 审计、§4.6 子窗口、§4.12 proptest Op（去掉 skip，进入随机生成）、用例 15–17 | `random_operations_dont_panic` 多轮无 panic。M2（a/b）中显示中的窗口不跟随，停留在呈现时的工作区；**为保证不变量 4 不被违反，M2 暂不启用不变量 4** |
 | M3 | niri 集成：config 动作、IPC 动作/字段/变化检测/校验、`do_action`、§4.8 副作用与可见性（含 §4.8.1 D14/D15）、文档、客户端集成测试 | 可日常使用 |
 | M4 | 跟随：§4.7 全部调用点 + 不变量 4 + 用例 8–11、14 | |
-| M5 | 视觉：钉住渲染、专门的收起/展开动画（§8） | |
+| M5a | 钉住渲染（§9.2）：切换中钉住、命中同步、屏幕位置优先、Overview 滑入与交接、工作区离开显示器时留下 | §9.2.7；可单独日常使用 |
+| M5b | 收起/展开动画（§9.3） | §9.3.3 |
 | M6 | 窗口规则 `open-in-scratchpad` / `is-in-scratchpad`；再映射时保留身份（可选） | |
 
 工作量估算（含测试，业余时间）：M1 约 2–4 天；M2 约 5–8 天；M3 约 3–4 天；M4 约 2–3 天。原设计“150–250 行 / 3–4 周”只对功能一大致成立。
@@ -942,6 +943,8 @@ M4 补充说明：
 
 ## 8. 后续阶段要求（M5/M6，本轮不实现，仅作约束）
 
+M5 的详细设计见 §9（满足本节全部约束）。
+
 **钉住渲染（R10）**：为显示中的暂存窗口提供统一的“有效屏幕几何 + 层叠顺序”，让渲染、`window_under()`、`resize_edges_under()`、拖动起点（`mod.rs` 约 3950 行）、弹出菜单定位共享同一结果。定义它与目标工作区全屏窗口、bar、overlay 的层级。Overview 的进入/退出动画中不钉住。源、目标工作区的 layout 覆盖不同（strut/边框）时，以屏幕位置优先，松手后修正比例位置。
 
 钉住渲染还须一并处理（M4 结束时经用户决定并入 M5）：
@@ -959,3 +962,224 @@ M4 补充说明：
 **拖动期间其他工作区的移除（M1b 发现）**：拖动中所有工作区的视图被 DnD 手势锁住，`fill_view_after_removal()` 会跳过；松手后只补夹紧源工作区。若需要，可在 `interactive_move_end()` 中对拖动期间发生过平铺移除的工作区（记录 id 集合）统一补一次夹紧。
 
 **异步尺寸校正（R7）**：如有需要，加一次性的“移除后待校正”标记。下一次活动列提交尺寸后执行一次夹紧；任何手势、交互式 resize 或聚焦操作都会取消该标记。
+
+---
+
+## 9. M5 详细设计
+
+- 定稿：2026-10-05（M4 完成后）。源码基线 `b519b0f3`，行号为“约”，以函数名为准。
+- 取舍点 P1–P8 已由用户决定（均为推荐项），见 §9.5。
+- M5a（钉住渲染）与 M5b（收起/展开动画）各自可单独日常使用；本轮先做 M5a。
+
+### 9.1 源码事实
+
+| # | 事实 | 位置 |
+|---|---|---|
+| F1 | 输出渲染顺序（前→后）：overlay → [`render_above_top_layer()` 时：拖动中的窗口 → 工作区 → top → bottom/background]；否则 top → 拖动中的窗口 → 插入提示 → bottom/background 的弹出层 → 工作区 → bottom/background 普通层 → 工作区背景。`contents_under()` 的命中顺序与之一致 | `niri.rs` 约 4598–4660、3640–3680 |
+| F2 | `Monitor::render_above_top_layer()` 在有工作区切换或 Overview 时恒为 false | `monitor.rs` 约 1732 |
+| F3 | `Monitor::render_workspaces()` 分 4 遍：浮动·跨工作区移动 → 浮动·普通 → 平铺·跨工作区移动 → 平铺·普通（先推入者在上）。第 0/2 遍不剔除、不裁剪；第 1/3 遍剔除屏外工作区，切换/Overview 中纵向裁剪到工作区自身高度（裁剪在工作区坐标里做） | 约 1767 |
+| F4 | `Monitor::update_render_elements()`：跨工作区层对所有工作区更新；普通层只对未剔除的工作区更新。手势可把活动工作区拖出屏幕而被剔除 | 约 1176 |
+| F5 | 工作区屏幕几何唯一来源 `workspaces_render_geo()`：`loc = (0, first_ws_y + idx·h) + static_offset`，各分量与结果都取整到物理像素。Overview 关闭、无切换时活动工作区就在 static_offset（zoom 1） | 约 1563 |
+| F6 | `Monitor::window_under()` 先 `workspace_under(pos)` 按 y 选工作区，再只问该工作区；Overview 中只返回 `Activate`。`resize_edges_under()` 在 Overview 中返回 None。DnD 悬停目标（`mod.rs` 约 2940）也经 `Monitor::window_under()` | 约 1658、1674 |
+| F7 | `Workspace::is_floating_visible()`：焦点在平铺全屏窗口（`render_above_top_layer()`）且浮动层未激活/未抬起时，浮动层不渲染（Normal 层）、不命中 | `workspace.rs` 约 1833、1788、1907 |
+| F8 | 拖动起点 `Layout::interactive_move_begin()` 在**剔除后的** `workspaces_with_render_geo()` 中找窗口，用 `ws_geo.loc + tile_offset·zoom` 算指针比例 | `mod.rs` 约 4503 |
+| F9 | 弹出菜单定位 `popup_target_rect()` 只用工作区内、相对窗口的坐标（浮动：工作区 working area），与工作区在屏幕上的位置无关；弹出层随窗口渲染元素一起画、经 `window_under` 的 `win_pos` 命中 | `floating.rs` 约 375、`xdg_shell.rs` 约 1305 |
+| F10 | 光标跳转 `active_window_visual_rectangle()` 返回工作区内坐标，按“工作区静止”解释 | `niri.rs` 约 1054 |
+| F11 | 上游已有“跨工作区移动”机制：Tile 的 move 动画带 `is_between_workspaces`，进第 0/2 遍（不裁剪、在上）；`Monitor::move_to_workspace()` 带焦点移走窗口时用 workspace-switch 配置，使窗口随切换动画“看起来不动” | `tile.rs` 约 471、597–682；`monitor.rs` 约 904–995 |
+| F12 | 浮动位置 `Data`：比例 `pos` 为准，`logical_pos` 由 working area 换算并夹紧（保证部分可见） | `floating.rs` 约 82–190 |
+| F13 | `toggle_overview_to_workspace()` 的切换与缩放用同一配置、同时开始，正常同时结束。Overview 动画结束时 `overview_progress` 变 None；`Monitor::set_overview_progress()` 每帧都会被调用（值可能不变） | `mod.rs` 约 5378、3005；`monitor.rs` 约 1467 |
+| F14 | 开窗动画默认：alpha = p，缩放 = p/2 + 0.5；关窗动画默认：alpha = 1 − p，缩放 = (1 − p)/5 + 0.8。两者不对称；custom-shader 分别是 Open/Close 两个程序 | `opening_window.rs`、`closing_window.rs` |
+| F15 | 关窗快照：niri 层 `State::store_unmap_snapshot()`（GlesRenderer + xray）把快照存进 Tile；`ClosingWindow::new()` 立即渲染为纹理 | `niri.rs` 约 2257、`closing_window.rs` |
+| F16 | 布局测试与客户端测试都没有渲染器，渲染元素不可断言；可断言的是几何函数、`window_under()` / `resize_edges_under()` / 拖动起点的结果 | — |
+
+### 9.2 M5a 钉住渲染
+
+#### 9.2.1 概念与唯一几何来源
+
+“钉住”= 工作区切换（动画或手势）进行中、Overview 完全关闭时，活动工作区里显示中的暂存窗口按**活动工作区的静止几何**渲染与命中，而不是随工作区滑动（P1）。不变量 4 保证所有 `in_scratchpad` 浮动 Tile 都在活动工作区，所以只需处理活动工作区。
+
+```rust
+// monitor.rs
+/// Geometry to render and hit-test the shown scratchpad windows of the active workspace with,
+/// when they are pinned to the screen.
+///
+/// They are pinned during a workspace switch outside the overview, at the place where the active
+/// workspace is at rest.
+pub fn scratchpad_pin_geo(&self) -> Option<Rectangle<f64, Logical>>
+```
+
+- 条件：`self.overview_progress.is_none() && self.workspace_switch.is_some()`，否则 None。
+- 值：`Rectangle::new(static_offset(1.), workspace_size(1.))`。把 `workspaces_render_geo()` 中 static_offset 的计算提取为私有辅助函数共用（纯重构），保证与“无切换时活动工作区的 render geo”逐位相等。
+- 工作区内坐标不变，所以弹出菜单定位（F9）、光标跳转（F10）天然一致，**不改**。
+- 所有消费者每次现算，不缓存（R10：避免状态不同步）。
+
+#### 9.2.2 渲染
+
+| 规则 | 落点 |
+|---|---|
+| 新增 `RenderLayer::PinnedScratchpad`（`RenderLayer` 加 `PartialEq, Eq`） | `mod.rs` 约 615 |
+| 浮动 Tile 归层：`pin_scratchpad && tile.in_scratchpad` → Pinned；否则 `is_moving_between_workspaces()` → MovingBetweenWorkspaces；否则 Normal。替换现有 `layer.is_normal() == tile.is_moving_between_workspaces()` 判断（两处） | `FloatingSpace::render`、`FloatingSpace::update_render_elements` 加参数 `pin_scratchpad: bool`；归层写成私有函数 |
+| 关窗动画只在 Normal 层画（不变） | `FloatingSpace::render` |
+| `Workspace::render_floating(.., layer, pin_scratchpad, ..)`：可见性提前返回改为 `!is_floating_visible() && layer != MovingBetweenWorkspaces`，即 Pinned 层与 Normal 一样服从可见性（P2） | `workspace.rs` 约 1788 |
+| `Workspace::update_render_elements(is_active, layer, pin_scratchpad)`：Pinned 层不更新平铺层、不更新阴影 | 约 381 |
+| `Monitor::render_workspaces()`：`pin = scratchpad_pin_geo()`。若 Some，在第 0 遍之前对活动工作区画 Pinned 层：几何用 pin geo（`scale_relocate(pin_geo, ..)`）、裁剪边界无限、`XrayPos::new(pin.loc, 1.)`；其余各遍对所有工作区传 `pin_scratchpad = pin.is_some()` | 约 1767 |
+| `Monitor::update_render_elements()`：同理，pin 为 Some 时对活动工作区单独更新 Pinned 层（**不经剔除**，F4） | 约 1176 |
+| 平铺层从不接收 Pinned（平铺层没有 in_scratchpad Tile，不变量 2） | — |
+
+层级：钉住 Tile 是工作区元素中的最上层（高于跨工作区移动的窗口）；整体仍在 top 层（bar）、overlay、拖动中的窗口之下（切换中 F2 恒成立，F1 不变）。
+
+#### 9.2.3 输入
+
+| 规则 | 落点 |
+|---|---|
+| 新增 `Workspace::scratchpad_tiles_with_render_positions()`：浮动层可见时，按层叠顺序（上→下）返回 in_scratchpad Tile 及工作区内渲染位置；不可见时为空 | `workspace.rs` |
+| `Workspace::window_under(pos, skip_scratchpad: bool)`、`Workspace::resize_edges_under(pos, skip_scratchpad: bool)`：为真时跳过 in_scratchpad 浮动 Tile。缩放边判定提取为私有函数 `resize_edges_for_tile(tile, pos_within_tile)` 共用 | 约 1907、1922 |
+| `Monitor::window_under()` 非 Overview 分支：pin 为 Some 时，先在 `scratchpad_tiles_with_render_positions()` 中用 `pos − pin.loc` 命中，结果 `offset_win_pos(pin.loc)`；未命中再走原逻辑并传 `skip_scratchpad = true`。钉住命中放在 `workspace_under()` 之前（指针落在工作区间隙时仍能命中）。Overview 分支传 false | 约 1658 |
+| `Monitor::resize_edges_under()`：同上顺序 | 约 1674 |
+| `Layout::interactive_move_begin()`：改为在**不剔除**的 `workspaces_with_render_geo_cull(false)` 中找窗口；若 pin 为 Some 且窗口是活动工作区的 in_scratchpad 浮动 Tile，则 `ws_geo = pin_geo`；否则若 `ws_geo` 与输出不相交，照旧返回 false（保持原行为） | `mod.rs` 约 4503 |
+| niri 层（`contents_under`、DnD 悬停目标、focus-follows-mouse、指针约束）全部经 `Layout/Monitor::window_under()`，不改 | — |
+
+#### 9.2.4 跟随时以屏幕位置优先
+
+源、目标工作区 layout 覆盖不同（struts 等）时 working area 不同，按比例恢复会让窗口在屏幕上跳动。规则：
+
+- `Workspace::take_shown_scratchpad_tiles()` 返回 `Vec<TakenScratchpadTile<W>>`（新增结构体，字段：`tile`、`was_focused`、`pos`：取出前的 `Data.logical_pos`、`working_area`：源工作区的 working area）。
+- 加入目标前：`if taken.working_area != ws.working_area() { tile.floating_pos = Some(ws.floating_logical_to_size_frac(taken.pos)) }`；相同时比例保持原值（逐位不变，现有测试不受影响）。
+- 手势中窗口留在源工作区（钉住画），松手跟随时按上条换算，所以松手前后屏幕位置相同（“松手后修正比例位置”）。
+- 已知细节：边框宽度覆盖不同时窗口内容会移动“边框差”；新位置若超出夹紧范围（F12）会被夹回。
+
+`Monitor::scratchpad_follow()` 拆为“收集”与新增的 `Monitor::add_shown_scratchpad_tiles(&mut self, tiles: Vec<TakenScratchpadTile<W>>)`（从下到上加入活动工作区、上述换算、`ensure_empty_workspaces_after_add`、无切换时 `clean_up_workspaces()`，即原函数后半段），供 §9.2.6 复用。
+
+#### 9.2.5 Overview（P3、P4）
+
+- Overview 进入/退出动画中与打开期间都不钉住（pin geo 为 None）。
+- **P3 跟随时滑入**：`scratchpad_follow()` 中，若 `overview_progress.is_some() && workspace_switch.is_some()`，对每个搬动的 Tile：记录源工作区 id 与取出前位置 `old`；加入后取新位置 `new`，`from = old − new + (0, workspace_size_with_gap(1.).h · (src_idx − dst_idx))`（下标在加入后按 id 重新查找；有切换时不清理，源工作区一定还在），`tile.animate_move_from_with_config(from, animations.workspace_switch)`，再 `set_anim_y_between_workspaces()`。与上游 `Monitor::move_to_workspace()` 写法一致（F11）：窗口不裁剪、画在上层、近似钉在屏幕上滑入新缩略工作区。Overview 中命中本来就只有 Activate，动画期间窗口不在其工作区范围内时点不中，可接受（与上游带窗口移动相同）。
+- **P4 交接**：`Monitor::set_overview_progress()` 中，修改前后各算一次 `scratchpad_pin_geo()`（修改后的值在其中“重启切换动画”之后取）。仅当钉住状态翻转时：
+  - Some → None（切换中打开 Overview）：`from = pin.loc − active_geo_after.loc`；
+  - None → Some（Overview 关闭动画结束时切换未结束）：`from = active_geo_before.loc − pin.loc`；
+  - `active_geo_*` 取 `workspaces_render_geo()` 中活动工作区的几何。翻转时 Overview 进度为 0，zoom 为 1，偏移可直接用于工作区坐标（不处理 zoom ≠ 1 的手势边界情况）。
+  - `from` 为零向量时跳过（静止时几何逐位相等）；否则对活动工作区每个 in_scratchpad 浮动 Tile 做 `animate_move_from_with_config(from, workspace_switch)` + `set_anim_y_between_workspaces()`。
+  - F13：该函数每帧调用，但只在翻转时动作。
+
+#### 9.2.6 工作区离开显示器（P5）
+
+统一规则：显示中的暂存窗口属于显示器而不是工作区。工作区离开显示器（插入显示器迁回原显示器、`move-workspace-to-monitor`）时，窗口留在原显示器，转入其新的活动工作区；只有显示器被移除时才随工作区迁移（`remove_output()` 不变，§4.7）。
+
+| 位置 | 做法 |
+|---|---|
+| `Layout::add_output()` 每个源显示器的循环 | `source.workspaces.remove(i)` 之前先 `take_shown_scratchpad_tiles()`，存入本源显示器的列表；该源显示器的循环与清理结束后 `add_shown_scratchpad_tiles()`。只剩暂存窗口的工作区取出后为空且无名，按现有逻辑不迁移 |
+| `Layout::move_workspace_to_output_by_id()` | `remove_workspace_by_idx()` 之前取出，之后加入源显示器的新活动工作区。取空的工作区仍按用户指令移到目标显示器（目标的清理逻辑照常） |
+
+- 窗口不离开输出，没有 leave/enter（陷阱 3）。焦点：`was_focused` 照跟随规则保留在源显示器的活动工作区内；全局活动显示器按原逻辑变化。
+- 预期变化：M4 用例 `shown_window_follows_workspace_to_other_output` 后两段的期望值改变（插入显示器：窗口留在 output1；`move-workspace-to-monitor`：窗口留在 output1），是设计变更而非回归，提交说明中写明。
+- `insert_workspace()`、`append_workspaces()` 末尾的跟随调用保留（兜底，其余情况无操作）。
+
+#### 9.2.7 M5a 测试
+
+布局测试（`src/layout/tests/scratchpad.rs`），期望值先手算。“视觉位置”用测试辅助函数从 `workspaces_render_geo()`、`scratchpad_pin_geo()`、`tiles_with_render_positions()`、zoom 算出，与渲染使用同一组函数。
+
+| # | 场景 | 断言 |
+|---|---|---|
+| 1 | 键盘切换动画中（`AdvanceAnimations` 若干毫秒） | `window_under(暂存窗口中心)` 命中且 `win_pos` 等于静止值；未钉住时它所在的位置（随工作区平移后）不命中它 |
+| 2 | 手势中途；手势拖远使活动工作区被剔除 | 同上；`GestureEnd` + `CompleteAnimations` 后位置不变 |
+| 3 | 静止 / 有切换 | 静止时 pin geo 为 None；切换中 pin geo 与静止时活动工作区 render geo 逐位相等 |
+| 4 | Overview 打开 / 动画中 | pin geo 为 None；命中为 Activate |
+| 5 | 目标工作区焦点为平铺全屏、暂存窗口未聚焦（P2） | 切换中暂存窗口中心命中全屏窗口 |
+| 6 | 切换中 `resize_edges_under`、`interactive_move_begin`（再 `InteractiveMoveUpdate` 越过阈值） | 边按钉住位置得出；拖动窗口渲染位置与钉住位置一致 |
+| 7 | 源、目标 struts 不同 / 相同 | 逻辑位置不变 / `floating_pos` 逐位不变 |
+| 8 | Overview 中键盘切换（P3） | Tile 有跨工作区移动动画；切换前后视觉位置连续；完成后在新工作区原位置 |
+| 9 | 切换动画中打开 Overview；Overview 关闭动画先于切换结束（P4） | 翻转前后视觉位置连续 |
+| 10 | 插入显示器、`move-workspace-to-monitor`（P5） | 窗口留在原显示器活动工作区，焦点、空工作区不变量正确 |
+
+客户端测试（`src/tests/scratchpad.rs`）：P5 两种情况下暂存窗口没有 `wl_surface.leave/enter`。
+
+嵌套 niri（`animations { slowdown 10; }`，截图路径放会话 scratchpad）：键盘切换中多次 `screenshot-screen`，确认暂存窗口像素位置不变、背景在动；Overview 中切换看滑入。触控板手势在嵌套中无法驱动，由用例 2 覆盖，日常使用中确认。
+
+反向验证：逐个去掉渲染以外的关键实现点（命中钉住分支、`skip_scratchpad`、拖动起点、working area 换算、P3、P4、P5 两处），确认对应用例失败。
+
+### 9.3 M5b 收起/展开动画
+
+#### 9.3.1 视觉（P6）
+
+收起 = window-open 动画倒放，呈现 = window-open 正放。两者是同一个关于进度 v 的函数（默认 alpha = v、缩放 = v/2 + 0.5；或用户的 window-open custom-shader，`niri_progress` 递减），所以反向打断只需从当前 v 继续，精确连续；R16 的“custom-shader 不可逆时降级”在该方案下不出现。不新增配置；window-open 为 off 时收起、呈现都不播动画。D3 在 M5b 完成时改为“收起/展开均用 window-open 动画”。
+
+#### 9.3.2 记录与快照
+
+```rust
+// 新文件 src/layout/hiding_window.rs
+pub struct HidingWindow<Id> {
+    pub id: Id,
+    /// 转换代次（Layout.scratchpad.next_gen 递增）。
+    pub gen: u64,
+    /// 进度 v0 → 0，配置 window-open。复用 OpenAnimation 的渲染。
+    anim: OpenAnimation,
+    /// niri 层随后填入；布局测试中始终为 None。
+    snapshot: Option<TileRenderSnapshot>,
+    /// 工作区坐标中的 Tile 渲染位置与尺寸（P8：不随长带滑动）。
+    pos: Point<f64, Logical>,
+    tile_size: Size<f64, Logical>,
+}
+```
+
+- 存放：`Workspace.scratchpad_hiding: Vec<HidingWindow<W::Id>>`，在 `Workspace::render_floating()` 的 Normal 层最先画（在浮动 Tile 之上，同关窗动画）；按 `RenderTarget` 选普通/屏蔽内容（同 `ClosingWindow`）。无快照时不画。
+- 隐藏队列中的 Tile 新增 `scratchpad_hide_gen: Option<u64>`。
+
+**创建**（`Layout::move_to_scratchpad`，`remove_tile` 之前取位置与尺寸）：源工作区是其显示器的活动工作区、有输出、window-open 未关闭时创建；`v0` = Tile 正在进行的开窗动画进度（`clamped_value`），否则 1。按 `--id` 隐藏非活动工作区上的窗口、无输出时都不创建。
+
+**快照**：布局层不碰 GPU。niri 层 `State::on_window_hidden_to_scratchpad()` 新增第 0 步（在清可见性缓存、关闭弹出菜单之前）：调用现有 `State::store_unmap_snapshot(window, output)`，`output` 取记录所在显示器；`Layout::store_unmap_snapshot()` 增加分支：窗口是隐藏窗口且有无快照的记录时，用隐藏 Tile 的 `render_snapshot()`（改为 `pub(super)`）按记录位置生成快照填入记录。
+
+**呈现**（`scratchpad_show`、规则 3（P7）、`remove_from_scratchpad` 的 Hidden 分支、新子窗口呈现父窗口、`activate_window`）：先按 id 从所有工作区删除记录；若 gen 与 Tile 的一致，取其当前 v，开窗动画从 v 开始（新增 `Tile::start_open_animation_from(v)`；`start_open_animation()` 等价于 v = 0）；否则从 0。规则 3 搬动时没有记录，从 0 播。同一帧最多一份呈现。
+
+**释放**：动画结束（`Workspace::advance_animations` 丢弃）；窗口退出（`remove_window_impl` 隐藏分支按 id 删除）；工作区被清理（随工作区丢弃）；`remove_output()`、`add_output()` 迁移的工作区、`move_workspace_to_output_by_id()` 移动的工作区：丢弃其中记录；无输出时（`MonitorSet::NoOutputs`）不应存在记录。
+
+**不变量**（加入 `verify_invariants()`）：每条记录的 id 是隐藏窗口且 gen 与该 Tile 的 `scratchpad_hide_gen` 一致；每个 id 至多一条；无输出时没有记录。`are_animations_ongoing()` 包含记录。
+
+#### 9.3.3 M5b 测试
+
+布局测试测记录簿记（无渲染器）：
+
+| # | 场景 | 断言 |
+|---|---|---|
+| 1 | 活动工作区隐藏 | 产生一条记录，v0 = 1 |
+| 2 | `--id` 隐藏非活动工作区窗口；window-open off；无输出 | 无记录 |
+| 3 | 收起中呈现 | 记录被删；开窗动画从记录当前 v 开始 |
+| 4 | 开窗动画中隐藏 | 记录 v0 = 当时开窗进度 |
+| 5 | 收起中关窗、移除输出、工作区被清理、`move-workspace-to-monitor` | 无残留记录 |
+| 6 | 隐藏 → 呈现 → 隐藏 | 只有一条记录，gen 递增 |
+| 7 | 规则 3 | 开窗动画从 0 播 |
+| 8 | 随机测试 | 不变量成立 |
+
+嵌套 niri 慢速截图确认视觉与反向打断。
+
+### 9.4 里程碑与提交
+
+| 步 | 提交 | 验收 |
+|---|---|---|
+| M5a-1 | `layout: Extract workspace static offset`（纯重构，若 9.2.1 需要） | 现有测试与快照零变化 |
+| M5a-2 | `layout: Pin shown scratchpad windows during workspace switches`（pin geo、RenderLayer、渲染与渲染元素更新） | 编译、现有测试不变 |
+| M5a-3 | `layout: Hit-test pinned scratchpad windows at their pinned position`（命中、缩放边、拖动起点） | |
+| M5a-4 | `layout: Keep screen position of scratchpad windows following to another workspace`（含 `TakenScratchpadTile`、`add_shown_scratchpad_tiles`） | 现有测试不变 |
+| M5a-5 | `layout: Animate scratchpad windows following in the overview`（P3） | |
+| M5a-6 | `layout: Hand pinned scratchpad windows over to the overview`（P4） | |
+| M5a-7 | `layout: Keep shown scratchpad windows on their output when workspaces move away`（P5，同一提交更新 M4 用例期望值并说明） | |
+| M5a-8 | 测试（布局 + 客户端） | 9.2.7 全过；反向验证；慢测试；随机测试多轮 |
+| M5a-9 | `wiki: …`（跟随、钉住、Overview、多显示器行为） | `wiki-parses` |
+| M5b-1 | 记录与簿记（布局，无渲染）+ 不变量 | |
+| M5b-2 | 渲染与快照钩子（布局 + niri 层） | |
+| M5b-3 | 从进度呈现、规则 3 动画 | |
+| M5b-4/5 | 测试、wiki | 9.3.3 全过；嵌套截图 |
+
+每步：编译 → 相关测试 → `cargo +nightly fmt --all` → `cargo clippy --workspace --all-targets` 无新警告 → 单独提交。M5a 完成后打包日常使用，再开始 M5b。
+
+### 9.5 已定取舍（2026-10-05）
+
+| # | 决定 |
+|---|---|
+| P1 | 仅在工作区切换进行中、Overview 完全关闭时钉住；静止时层叠与普通浮动窗口一致 |
+| P2 | 钉住窗口服从活动工作区的 `is_floating_visible()` |
+| P3 | Overview 中跟随时用跨工作区移动动画滑入新缩略工作区 |
+| P4 | 钉住状态因 Overview 翻转时用动画交接剩余偏移 |
+| P5 | 工作区离开显示器时窗口留在原显示器；只有显示器被移除时才迁移 |
+| P6 | 收起/展开 = window-open 倒放/正放，不新增配置 |
+| P7 | 规则 3 搬动时播呈现动画 |
+| P8 | 收起快照用工作区坐标，存于 Workspace |
