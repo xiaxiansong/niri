@@ -1433,10 +1433,12 @@ impl<W: LayoutElement> Monitor<W> {
             return;
         }
 
-        let mut new_idx = new_idx.clamp(0, self.workspaces.len() - 1);
+        let new_idx = new_idx.clamp(0, self.workspaces.len() - 1);
         if old_idx == new_idx {
             return;
         }
+
+        let active_id = self.workspaces[self.active_workspace_idx].id();
 
         let ws = self.workspaces.remove(old_idx);
         self.workspaces.insert(new_idx, ws);
@@ -1449,7 +1451,6 @@ impl<W: LayoutElement> Monitor<W> {
 
             if self.options.layout.empty_workspace_above_first && old_idx == 0 {
                 self.add_workspace_top();
-                new_idx += 1;
             }
         } else {
             if old_idx == self.workspaces.len() - 1 {
@@ -1459,20 +1460,12 @@ impl<W: LayoutElement> Monitor<W> {
 
             if self.options.layout.empty_workspace_above_first && new_idx == 0 {
                 self.add_workspace_top();
-                new_idx += 1;
             }
         }
 
-        // Only refocus the workspace if it was already focused
-        if self.active_workspace_idx == old_idx {
-            self.active_workspace_idx = new_idx;
-        // If the workspace order was switched so that the current workspace moved down the
-        // workspace stack, focus correctly
-        } else if new_idx <= self.active_workspace_idx && old_idx > self.active_workspace_idx {
-            self.active_workspace_idx += 1;
-        } else if new_idx >= self.active_workspace_idx && old_idx < self.active_workspace_idx {
-            self.active_workspace_idx = self.active_workspace_idx.saturating_sub(1);
-        }
+        // Keep the same workspace active. Adding the empty workspaces above may have already
+        // changed active_workspace_idx, so look it up rather than adjusting it.
+        self.active_workspace_idx = self.idx_of_ws(active_id).unwrap();
 
         self.workspace_switch = None;
 
