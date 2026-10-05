@@ -334,8 +334,8 @@ fn remove_window_impl(&mut self, window: &W::Id, transaction: Transaction, fill_
 
 1. 当前聚焦窗口 F 处于 Shown 且通过过滤器 → **隐藏 F**（走 §4.5.1，可能因子窗口被拒绝，此时什么都不做）。返回 `Hidden(id)`；被拒绝时返回 `Nothing`。
 2. 聚焦显示器的活动工作区上，有 Shown 状态的候选 → 聚焦其中 `scratchpad_shown_seq` 最大的那个。返回 `Focused(id)`。
-3. 聚焦显示器活动工作区**以外**有 Shown 状态的候选（其他显示器；或 M4 跟随实现之前，同一显示器的非活动工作区）→ 取 `scratchpad_shown_seq` 最大者：
-   - 没有可见子窗口：从原工作区移除（`Workspace::remove_tile`，会 `output_leave`），赋予新的 `scratchpad_shown_seq`（视为一次呈现），加入当前活动工作区浮动层并聚焦（`add_scratchpad_tile(.., enter_output = true)`，位置按比例恢复），然后 `ensure_empty_workspaces_after_add`；若原工作区因此变空且不是其显示器的活动工作区，就走 §4.5.1 第 11 步的清理辅助函数。返回 `Shown(id)`；
+3. 聚焦显示器活动工作区**以外**有 Shown 状态的候选（M4 起由不变量 4 保证，只可能在其他显示器的活动工作区；M2/M3 中还可能在同一显示器的非活动工作区）→ 取 `scratchpad_shown_seq` 最大者：
+   - 没有可见子窗口：从原工作区移除（`Workspace::remove_tile`，会 `output_leave`），赋予新的 `scratchpad_shown_seq`（视为一次呈现），加入当前活动工作区浮动层并聚焦（`add_scratchpad_tile(.., enter_output = true)`，位置按比例恢复），然后 `ensure_empty_workspaces_after_add`；若原工作区因此变空且不是其显示器的活动工作区，就走 §4.5.1 第 11 步的清理辅助函数（M4 起来源总是某显示器的活动工作区，这段清理不会生效，作为防御保留）。返回 `Shown(id)`；
    - 有可见子窗口：改为 `activate_window(id)`（焦点切到它所在的显示器/工作区），不搬动。返回 `Focused(id)`。
 4. 有 Hidden 状态的候选 → 取隐藏队列中第一个匹配者（FIFO），呈现并聚焦。返回 `Shown(id)`。
 5. 否则什么都不做，打 `debug!`，返回 `Nothing`。
@@ -584,6 +584,25 @@ pub fn scratchpad_follow(&mut self) {
 | `Layout::refresh()` 末尾，对所有显示器 | 兜底 |
 
 实现者还需 `grep -n "active_workspace_idx = \|active_workspace_idx -= \|active_workspace_idx += " src/layout/{monitor,mod}.rs`，逐个判断是“重新编号（同一工作区）”还是“活动工作区真的变了”，后者补调用。由 `verify_invariants` 的第 4 条兜住遗漏（§4.11）。
+
+grep 结果（M4 核对，行号为 M4 开始时）：
+
+| 位置 | 判断 | 处理 |
+|---|---|---|
+| `Monitor::new()` 初始化（约 309–325） | 构造 | 由 `Layout::add_output()` 末尾覆盖 |
+| `add_workspace_at()`（约 424） | 重新编号 | 无 |
+| `activate_workspace_with_anim_config()`（约 459） | 真的变了 | 末尾调用 |
+| `clean_up_workspaces()` / `clean_up_workspace_after_removal()` 的 `-= 1`（约 675、701） | 重新编号 | 无 |
+| 同上两处全空特例 `= 0`（约 686、714） | 变了，但所有工作区为空 | 无需调用 |
+| `remove_workspace_by_idx()`（约 749） | 变了，但按不变量 4 剩余工作区没有显示中的窗口（被移走的才可能有） | 无需调用；接收方由 `insert_workspace()` 处理 |
+| `insert_workspace()`（约 775） | 插入位置不激活时重新编号；工作区本身可能带显示中的窗口 | 末尾调用 |
+| `append_workspaces()`（约 815） | 真的变了 | 末尾调用 |
+| `update_config()` 去掉首个空工作区（约 1241） | 重新编号 | 无 |
+| `move_workspace_to_idx()`（约 1374–1380） | 重新编号 | 无 |
+| `workspace_switch_gesture_end()`（约 2120） | 真的变了 | 末尾调用 |
+| `mod.rs` `add_output()` 中源显示器的 `saturating_sub`（约 870，grep 匹配不到 `source.active_workspace_idx =` 换行写法） | 真的变了 | `add_output()` 末尾对所有显示器调用 |
+
+`move_workspace_down/up()` 经 `activate_workspace()`，跟随为无操作（活动工作区就是被移动的那个）。
 
 工作区切换手势进行中：`active_workspace_idx` 在松手前不变，窗口留在旧工作区随之滑动；松手后再跟随。Overview 中切换工作区：窗口会在缩略工作区之间跳动，v1 接受。
 
