@@ -310,6 +310,120 @@ fn interactive_move_does_not_fill_view() {
     assert!(!ws.has_window(&4));
 }
 
+/// Starts an interactive move of a window on output 1 and moves it past the threshold to the given
+/// pointer position on the given output.
+fn start_moving(window: usize, output_idx: usize, px: f64, py: f64) -> [Op; 2] {
+    [
+        Op::InteractiveMoveBegin {
+            window,
+            output_idx: 1,
+            px: 0.,
+            py: 0.,
+        },
+        Op::InteractiveMoveUpdate {
+            window,
+            dx: 1000.,
+            dy: 1000.,
+            output_idx,
+            px,
+            py,
+        },
+    ]
+}
+
+#[test]
+fn interactive_move_fills_source_view_after_drop() {
+    let mut setup = four_columns_view_at_end();
+    setup.push(Op::AddOutput(2));
+
+    // Drop onto the other output. The right snap is now at 1032 + 500 + 16 - 1280 = 268.
+    let mut ops = setup.clone();
+    ops.extend(start_moving(4, 2, 640., 360.));
+    ops.push(Op::InteractiveMoveEnd { window: 4 });
+    assert_snapshot!(off_on(Options::default(), &ops), @"off: 784, on: 268");
+
+    let layout = check_ops_with_options(make_options(true), ops);
+    let (_, _, ws) = layout.workspaces().next().unwrap();
+    assert!(!ws.has_window(&4));
+    assert!(layout.has_window(&4));
+
+    // The window is closed while being moved.
+    let mut ops = setup.clone();
+    ops.extend(start_moving(4, 1, 640., 360.));
+    ops.push(Op::CloseWindow(4));
+    assert_snapshot!(off_on(Options::default(), &ops), @"off: 784, on: 268");
+}
+
+#[test]
+fn interactive_move_back_to_same_workspace() {
+    // Drop right back into the same spot, past the last column: x = 1000 + 784 + 8 > 1548.
+    let mut ops = four_columns_view_at_end();
+    ops.extend(start_moving(4, 1, 1000., 100.));
+    ops.push(Op::InteractiveMoveEnd { window: 4 });
+    assert_snapshot!(off_on(Options::default(), &ops), @"off: 784, on: 784");
+
+    // The view doesn't move at all.
+    let layout = check_ops_with_options(make_options(true), ops);
+    let (_, _, ws) = layout.workspaces().next().unwrap();
+    assert!(!ws.scrolling().view_offset().is_animation_ongoing());
+
+    // Drop into the column of window 3 (x = 490 + 784 + 8 = 1282), which leaves three columns.
+    // The right snap is now at 1032 + 500 + 16 - 1280 = 268.
+    let mut ops = four_columns_view_at_end();
+    ops.extend(start_moving(4, 1, 490., 100.));
+    ops.push(Op::InteractiveMoveEnd { window: 4 });
+    assert_snapshot!(off_on(Options::default(), &ops), @"off: 784, on: 268");
+
+    // The view goes straight to the final position.
+    let layout = check_ops_with_options(make_options(true), ops);
+    let (_, _, ws) = layout.workspaces().next().unwrap();
+    let scrolling = ws.scrolling();
+    assert_eq!(scrolling.columns().count(), 3);
+    assert!(scrolling.view_offset().is_animation_ongoing());
+    assert_snapshot!(scrolling.target_view_pos(), @"268");
+}
+
+#[test]
+fn interactive_move_of_floating_window() {
+    // Same setup as in floating_removal_does_not_fill_view().
+    let mut ops = vec![
+        Op::AddOutput(1),
+        Op::AddOutput(2),
+        floating_window(5, 300),
+        window(1, 500),
+        window(2, 500),
+        window(3, 500),
+        window(4, 500),
+        Op::FocusColumnFirst,
+        Op::FocusColumnLast,
+        Op::SetForcedSize {
+            id: 4,
+            size: Some(Size::new(200, 200)),
+        },
+        Op::Communicate(4),
+        Op::CompleteAnimations,
+    ];
+    ops.extend(start_moving(5, 2, 640., 360.));
+    ops.push(Op::InteractiveMoveEnd { window: 5 });
+    assert_snapshot!(off_on(Options::default(), &ops), @"off: 784, on: 784");
+
+    // A fullscreen window that unfullscreens to floating when the move starts did leave the
+    // scrolling layout. Same setup as in unfullscreen_to_floating_fills_view().
+    let mut ops = four_columns_view_at_end();
+    ops.extend([
+        Op::FocusColumnLast,
+        floating_window(5, 300),
+        Op::FullscreenWindow(5),
+        Op::Communicate(5),
+        Op::CompleteAnimations,
+        Op::FocusColumnLeft,
+        Op::CompleteAnimations,
+    ]);
+    ops.extend(start_moving(5, 1, 640., 360.));
+    ops.push(Op::InteractiveMoveEnd { window: 5 });
+    assert_snapshot!(off_on(Options::default(), &ops), @"off: 1532, on: 784");
+}
+
 #[test]
 fn fullscreen_or_maximized_active_column() {
     // Committed fullscreen.
@@ -517,4 +631,39 @@ fn unfullscreen_to_floating_fills_view() {
         Op::Communicate(5),
     ]);
     assert_snapshot!(off_on(Options::default(), &ops), @"off: 1532, on: 784");
+}
+
+#[test]
+fn consume_into_column_fills_view() {
+    let check = |ops: &[Op]| {
+        let mut all = four_columns_view_at_end();
+        all.extend_from_slice(ops);
+        off_on(Options::default(), &all)
+    };
+
+    // Window 3 is active and the last column disappears. The right snap is now at
+    // 1032 + 500 + 16 - 1280 = 268.
+    assert_snapshot!(check(&[Op::ConsumeWindowIntoColumn]), @"off: 784, on: 268");
+    assert_snapshot!(check(&[Op::ConsumeOrExpelWindowLeft { id: Some(4) }]), @"off: 784, on: 268");
+    assert_snapshot!(check(&[Op::ConsumeOrExpelWindowRight { id: None }]), @"off: 784, on: 268");
+    assert_snapshot!(
+        check(&[Op::FocusColumnLast, Op::ConsumeOrExpelWindowLeft { id: None }]),
+        @"off: 784, on: 268"
+    );
+
+    // Expelling adds a column at 1548, so the view has to show it either way:
+    // 1548 + 500 + 16 - 1280 = 784.
+    assert_snapshot!(
+        check(&[
+            Op::ConsumeOrExpelWindowLeft { id: Some(4) },
+            Op::ConsumeOrExpelWindowRight { id: None },
+        ]),
+        @"off: 784, on: 784"
+    );
+
+    let mut ops = four_columns_view_at_end();
+    ops.push(Op::ConsumeWindowIntoColumn);
+    let mut layout = check_ops_with_options(make_options(true), ops);
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_active_column_visible(&layout);
 }
