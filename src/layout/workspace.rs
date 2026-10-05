@@ -1448,6 +1448,7 @@ impl<W: LayoutElement> Workspace<W> {
         } else {
             let mut removed = self.scrolling.remove_tile(&id, Transaction::new());
             removed.tile.stop_move_animations();
+            self.scrolling.fill_view_after_removal();
 
             // Come up with a default floating position close to the tile position.
             let stored_or_default = self.floating.stored_or_default_tile_pos(&removed.tile);

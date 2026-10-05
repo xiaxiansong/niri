@@ -1157,6 +1157,15 @@ impl<W: LayoutElement> Layout<W> {
         window: &W::Id,
         transaction: Transaction,
     ) -> Option<RemovedTile<W>> {
+        self.remove_window_impl(window, transaction, true)
+    }
+
+    fn remove_window_impl(
+        &mut self,
+        window: &W::Id,
+        transaction: Transaction,
+        fill_view: bool,
+    ) -> Option<RemovedTile<W>> {
         if let Some(state) = &self.interactive_move {
             match state {
                 InteractiveMoveState::Starting { window_id, .. } => {
@@ -1199,6 +1208,10 @@ impl<W: LayoutElement> Layout<W> {
                         if ws.has_window(window) {
                             let removed = ws.remove_tile(window, transaction);
 
+                            if fill_view && !removed.is_floating {
+                                ws.fill_view_after_removal();
+                            }
+
                             // Clean up empty workspaces that are not active and not last.
                             if !ws.has_windows_or_name()
                                 && idx != mon.active_workspace_idx
@@ -1232,6 +1245,10 @@ impl<W: LayoutElement> Layout<W> {
                 for (idx, ws) in workspaces.iter_mut().enumerate() {
                     if ws.has_window(window) {
                         let removed = ws.remove_tile(window, transaction);
+
+                        if fill_view && !removed.is_floating {
+                            ws.fill_view_after_removal();
+                        }
 
                         // Clean up empty workspaces.
                         if !ws.has_windows_or_name() {
@@ -3386,6 +3403,10 @@ impl<W: LayoutElement> Layout<W> {
             let transaction = Transaction::new();
             let mut removed = ws.remove_tile(&window, transaction);
 
+            if !removed.is_floating {
+                ws.fill_view_after_removal();
+            }
+
             removed.tile.stop_move_animations();
 
             let mon = &mut monitors[new_idx];
@@ -3441,6 +3462,7 @@ impl<W: LayoutElement> Layout<W> {
             let Some(column) = ws.remove_active_column() else {
                 return;
             };
+            ws.fill_view_after_removal();
 
             let workspace_idx = target_ws_idx
                 .unwrap_or(monitors[new_idx].active_workspace_idx)
@@ -3991,12 +4013,16 @@ impl<W: LayoutElement> Layout<W> {
                 ws.set_fullscreen(window, false);
                 ws.set_maximized(window, false);
 
+                // Don't fill the view here: the window is still being dragged and may be dropped
+                // right back.
                 let RemovedTile {
                     mut tile,
                     width,
                     is_full_width,
                     is_floating,
-                } = self.remove_window(window, Transaction::new()).unwrap();
+                } = self
+                    .remove_window_impl(window, Transaction::new(), false)
+                    .unwrap();
 
                 tile.stop_move_animations();
                 tile.interactive_move_offset = Point::from((0., 0.));

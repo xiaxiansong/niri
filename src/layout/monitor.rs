@@ -858,6 +858,10 @@ impl<W: LayoutElement> Monitor<W> {
         let transaction = Transaction::new();
         let removed = workspace.remove_tile(&window, transaction);
 
+        if !removed.is_floating {
+            workspace.fill_view_after_removal();
+        }
+
         // If the view is following the tile, match the animation.
         let config = if activate {
             self.options.animations.workspace_switch.0
@@ -946,6 +950,7 @@ impl<W: LayoutElement> Monitor<W> {
             .unwrap();
 
         let column = workspace.remove_active_column().unwrap();
+        workspace.fill_view_after_removal();
 
         // Animate vertical movement between workspaces.
         old_render_pos.y +=
