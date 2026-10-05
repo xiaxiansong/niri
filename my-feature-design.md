@@ -807,7 +807,7 @@ fi
 | M1a | ✅ 2026-10-05 | `87949e15` 配置、`a541a30f` 提取吸附端点、`e303873d` 夹紧函数、`9833ba51` 调用点、`18fca982` 测试 | — |
 | M1b | ✅ 2026-10-05 | `2fc8c299` F1-5、`1f38e79c` F1-6、`cabf5b38` 测试 | `cargo test --all` 249 / 0 失败（niri lib 226）；慢测试 134；`fill_view.rs` 共 21 个用例，新增触发点均做过反向验证 |
 | 功能一手动矩阵（§3.6） | ⏳ 待做 | — | 日常使用版本已打包（M1a + M1b） |
-| M2a | 未开始 | | |
+| M2a | ✅ 2026-10-05 | `acc33e09` 清理辅助函数、`f6bb247f` `ensure_empty_workspaces_after_add`、`97c29645` 数据结构、`ef559bcf` 隐藏、`cf6206d7` 呈现与接口、`39bca733` 退出暂存区落点、`886a9374` 不变量、`70d20ac8` 测试 | `cargo test --all` 263 / 0 失败（niri lib 240）；慢测试 148；`scratchpad.rs` 共 14 个用例，关键实现点均做过反向验证 |
 | M2b | 未开始 | | |
 
 M1b 补充说明：
@@ -816,6 +816,17 @@ M1b 补充说明：
 - “拖回同一工作区只滑一次”：放置与夹紧在同一次调用内完成，单元测试中时间不推进，两段式本身不可观测；用例断言的是松手后动画终点即最终值、放回原位时视图完全不动。最终以手动测试为准。
 - `source_workspace` 按本文用 `Option<WorkspaceId>`，实际总为 `Some`，可简化为 `WorkspaceId`（未改，待定）。
 - 收尾 grep（§3.4）结果：所有移除路径均已触发或属于表格中的“否”；`swap_window_in_direction` 不改变列数，无需触发。
+
+M2a 补充说明：
+
+- `LayoutElement` 还有第三个实现：`niri-visual-tests/src/test_window.rs`。`cargo clippy --all-targets` 只检查根包，发现不了它；以后每步都用 `cargo clippy --workspace --all-targets`。数据结构提交当时漏改了它，已用 fixup 并入该提交，并逐个提交确认工作区编译、clippy 无警告。
+- 数据结构单独提交时，新字段和 `set_tile_scratchpad` 尚未被使用，会产生 dead_code 警告。该提交临时加了 `#[allow(dead_code)]`，在后续“隐藏”“呈现”提交中随使用逐个去掉，最终代码中没有残留。
+- proptest-derive 不允许在 `#[proptest(skip)]` 变体的字段上写 `strategy`（错误 E0028）。所以三个暂存区 Op 目前不带 strategy；M2b 去掉 skip 时要补上 §4.12 中的 `proptest::option::of(1..=5usize)`。
+- 用例对照：1 `floating_window_keeps_geometry`；2 `tiled_window_first_shown_with_default_size`（含规则值、夹紧 off/on）；3 `generic_toggle_cycles_through_queue`；4 `toggle_by_id_keeps_queue_order`；5 `generic_toggle_focuses_most_recently_shown`；6 `leaving_floating_takes_out_of_scratchpad`；7 `interactive_move_of_shown_window`（含落到另一显示器活动工作区）；12 `close_hidden_window`；13 `hidden_windows_survive_output_removal`；18 `hidden_window_commit_does_not_animate`；19 `activating_hidden_window_shows_it`；20 `hiding_twice_is_noop`；21 `remove_hidden_window_from_scratchpad`。另加 `shown_window_elsewhere_is_brought_over`，覆盖规则 3（其他显示器、同显示器非活动工作区、源工作区变空后被清理）。
+- 反向验证（逐个去掉后确认对应用例失败，再从 git 还原）：`Workspace::add_tile` 入口清标记、`toggle_window_floating` 浮动→平铺清标记、隐藏时的 `fill_view_after_removal()`、FIFO 的 `push_back`（改成 `push_front`）、D8 拖动落点恢复 Shown、`update_window` 隐藏分支的 `stop_all_animations()`。
+- 未被用例覆盖：规则 3 搬动时递增 seq。M2a 中可以观察到，但需要多显示器加多个选择器的组合，未单独写用例。
+- 规则 3 搬动窗口时没有开窗动画（文档未要求），窗口直接出现在当前工作区。是否加动画留到 M5 一并考虑。
+- M3 注意：`scratchpad_state()` 是 `LayoutElement` 的 trait 方法，niri 层（IPC）调用时需要 `use crate::layout::LayoutElement`。
 
 ---
 
