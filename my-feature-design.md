@@ -857,6 +857,7 @@ fi
 | M2b | ✅ 2026-10-05 | `69521a77` A 类、`4246ec5b` C/C'/C'' 类、`cda56e5b` 子窗口、`589b3c1d` proptest Op、`075ed4c9` 测试 | `cargo test --all` 267 / 0 失败（niri lib 244）；慢测试 152；`scratchpad.rs` 共 18 个用例；`random_operations_dont_panic` 10 轮 × 5000 cases，另有 256 + 3000 + 10000 cases 的单独运行，共约 6.3 万 cases，无 panic |
 | M3 | ✅ 2026-10-05 | `34ac9026` IPC 窗口字段、`9f2bbf3d` 可见性兜底、`e3ee7cf4` 动作与副作用入口、`c6225784` D14/D15/D16、`e51627b6` wiki、`3dc06bbe` `142cefb7` 客户端测试；文档 `cc5cdd32` `9388edb2` `68c0d3c8` | `cargo test --all` 275 / 0 失败（niri lib 252）；慢测试 152；`src/tests/scratchpad.rs` 共 8 个用例；日常使用版本已打包（M1 + M2 + M3，28 个补丁）：`niri-git 26.04.r193.gf15e90b-1`（旧包 r173 移到打包目录的 `old/`） |
 | M4 | ✅ 2026-10-05 | `a6437a0a` 单一出口重构、`c95a2c1f` `scratchpad_follow()`、`bb6a3713` 调用点、`386fe373` 不变量 4、`81c67779` 测试、`ac32e72f` 激活不被抢焦点、`8b9d6850` 其测试、`659a6cd6` 客户端 enter/leave 测试、`58abd90d` wiki；文档 `43676d17` `c8f1b387` `eb8dc0a8` | `cargo test --all` 283 / 0 失败（niri lib 260）；慢测试 158；`random_operations_dont_panic` 13 轮 × 5000 cases 无 panic；layout `scratchpad.rs` 24 个用例、`src/tests/scratchpad.rs` 10 个用例 |
+| M5a | ✅ 2026-10-06 | `9da35e66` 提取 static offset、`2a4d36ca` 钉住渲染、`80d3a0dc` 钉住命中、`8e0ad0dd` 跟随保持屏幕位置（换算部分随后由 `c3c37d53` 删除）、`591db6ec` Overview 中滑入（P3）、`b74cdcfa` Overview 交接（P4）、`256826d6` 工作区离开显示器时留下（P5）、`213bcd84` 测试、`4a4be535` wiki；M4 遗留修复 `9de6e32d` `6c2cba42` `02493b09`；文档 `65a1bc45` `b1f8899e` `d846c86d` | `cargo test --all` 295 / 0 失败（niri lib 272）；慢测试 168；`random_operations_dont_panic` 20 轮 × 5000 cases（修复前 10 轮中 4 轮失败，修复后 10 轮无 panic）；layout `scratchpad.rs` 33 个用例、`src/tests/scratchpad.rs` 12 个用例 |
 
 M1b 补充说明：
 
@@ -918,6 +919,19 @@ M4 补充说明：
 - 嵌套冒烟测试（ghostty，经 IPC 驱动）：通过 app-id 呈现后上下切换工作区，窗口跟随且保持焦点；新增/清理空工作区正确；`focus-window --id` 跳到其他工作区的窗口时焦点在目标窗口，暂存窗口跟随但不抢焦点；未聚焦时普通切换不抢焦点；事件流中 `workspace_id` 随每次跟随更新；截图确认位置。日志无 ERROR、无 panic（仅上游已有的 winit/touch WARN）。未做（需人工）：Overview 中跟随、触控板手势、多显示器插拔。
 - 待定：M3 手动测试反馈（模板已给用户，日常使用中填写）；窗口内部绘制对话框的风险暂按 (a) 已知限制处理，待反馈。
 - M4 结束时用户决定：插入显示器时窗口随工作区迁移、Overview 中窗口跳动，两者并入 M5 钉住渲染一起处理（§8）。M4 尚未打包，日常使用版本仍是 M3 的 `niri-git 26.04.r193.gf15e90b-1`（28 个补丁）。
+
+M5a 补充说明：
+
+- 开始前：M4 已打包为日常使用版本 `niri-git 26.04.r202.gd301299-1`（37 个补丁；r193 移到 `old/`），由用户安装。窗口内部绘制对话框的风险经用户决定按 (a) 已知限制处理。
+- 取舍 P1–P8 均按推荐项决定（§9.5）。
+- 文档修订（均先改文档再写代码）：§9.2.4（F17：浮动 working area 是输出的非独占区，struts 不计入，同一输出上所有工作区相同；原设计的换算分支永远不会触发，反向验证时发现，经用户同意删除）；§4.7 核对表 `move_workspace_to_idx()`（见下）。
+- **M4 遗留问题（随机测试发现）**：`empty-workspace-above-first` 下把活动工作区移到第 0 位时，`add_workspace_top()` 先改了 `active_workspace_idx`，上游随后的下标调整混用平移前后的值，活动工作区落到空工作区，暂存窗口不跟随，违反不变量 4。M4 基线 `b519b0f3` 上同样复现。release 中不变量不检查，`refresh()` 末尾的跟随兜底下一帧修正，所以已打包的 M4 日常使用不受影响。经用户同意两者都做：按 id 保持活动工作区（对上游行为的有意修正，仅限该边界情况，可另行报告上游）；末尾调用跟随兜底。M4 的 13 轮随机测试没有命中它。
+- 测试框架事实：`TestWindow::is_in_input_region()` 恒为 false，布局测试中 `window_under()` 总是返回 `Activate`，测不到 `win_pos`。命中断言改为比较命中的窗口（期望值原按 `Input` 手算，属测试假设错误，行为期望不变）；scale 1 时 pin geo 原点为 0，`win_pos` 的偏移本来也无法区分。
+- 用例对照（§9.2.7）：1 `shown_window_is_pinned_during_workspace_switch`（含缩放边）；2 `shown_window_is_pinned_during_workspace_switch_gesture`；3 `pin_geometry_matches_workspace_at_rest`（scale 1.5）；4 并入 `following_window_slides_in_overview`；5 `pinned_window_hidden_behind_fullscreen_is_not_hit`；6 `interactive_move_of_pinned_window_starts_at_pinned_position`；7 `following_window_keeps_screen_position`（仅回归保护）；8 `following_window_slides_in_overview`；9 `pinned_window_is_handed_over_to_overview`（两个方向）；10 M4 用例 `shown_window_follows_workspace_to_other_output` 后两段期望值按 P5 改变（属预期变化），另加客户端用例 `shown_window_stays_on_output_when_workspace_moves_to_other_monitor`、`shown_window_stays_on_output_when_workspace_goes_back_to_its_output`。另加 `shown_window_follows_after_moving_workspace_to_first`、`move_active_workspace_to_first_with_empty_workspace_above_first`。期望值均先手算；P5 期望值首次运行即符合。
+- 反向验证（逐个去掉后确认对应用例失败，再从 git 还原）：`window_under` 钉住分支与 `skip_scratchpad`、`resize_edges_under` 钉住分支与 `skip_scratchpad`、拖动起点、pin geo 的 Overview 条件、P3、P4、P5 两处、`move_workspace_to_idx` 的上游修复与跟随兜底（只撤修复时兜底掩盖了暂存窗口用例，需两者都撤才失败）。working area 换算的反向验证不失败，由此发现 F17。
+- 未被用例覆盖：渲染本身（F16，无渲染器），包括 Pinned 渲染遍、渲染元素更新不受剔除影响、xray 位置。由嵌套截图验证。
+- 嵌套 niri（`animations { slowdown 10; }`，scale 1.5，ghostty，经 IPC 驱动）：键盘切换过程中截图 5 张，屏幕其余部分在变，暂存窗口区域与静止时逐像素相同（唯一差异是终端文本光标闪烁）。日志无 ERROR、无 panic。未做（需人工）：触控板手势、Overview 中的滑入与交接、多显示器插拔与 `move-workspace-to-monitor`。
+- 提交历史：`8e0ad0dd` 加入的换算随后由 `c3c37d53` 删除，打包前可用 fixup 合并（待用户决定）。
 
 ---
 
