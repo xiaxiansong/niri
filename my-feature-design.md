@@ -590,9 +590,9 @@ pub fn scratchpad_follow(&mut self) {
 **统一副作用入口**（`src/input/mod.rs` 或 `src/niri.rs` 新增 `State::on_window_hidden_to_scratchpad(&mut self, window: &Window)`），仅在 `Layout` 返回“已隐藏”时调用：
 
 1. `self.niri.stop_casts_for_target(CastTarget::Window { id })`（D1）。
-2. 关闭该窗口的全部弹出菜单：`for (popup, _) in PopupManager::popups_for_surface(wl_surface) { let _ = PopupManager::dismiss_popup(wl_surface, &popup); }`（grab 菜单在焦点变化时也会被 ungrab，这里再显式关闭非 grab 菜单，避免再次呈现时出现位置过期的菜单）。
-3. `self.niri.window_mru_ui.remove_window(id)`（MRU 已打开时删除旧缩略图，D2）。
-4. 立即清可见性缓存：对窗口全部表面（`window.with_surfaces`）、对每个输出调用 `PrimaryScanoutOutput::update_from_render_element_states(id, output, None, &RenderElementStates::default(), |_, _, o, _| o)`。smithay 在“未呈现且当前输出相同”时会把缓存置 None。这样 idle inhibit（`refresh_idle_inhibit`，`niri.rs` 约 4160 行）立即释放，不再按刷新率发帧回调。
+2. 立即清可见性缓存：对窗口全部表面（`window.with_surfaces`）、对每个输出调用 `PrimaryScanoutOutput::update_from_render_element_states(id, output, None, &RenderElementStates::default(), |_, _, o, _| o)`。smithay 在“未呈现且当前输出相同”时会把缓存置 None。这样 idle inhibit（`refresh_idle_inhibit`，`niri.rs` 约 4160 行）立即释放，不再按刷新率发帧回调。
+3. 关闭该窗口的全部弹出菜单：`for (popup, _) in PopupManager::popups_for_surface(wl_surface) { let _ = PopupManager::dismiss_popup(wl_surface, &popup); }`（grab 菜单在焦点变化时也会被 ungrab，这里再显式关闭非 grab 菜单，避免再次呈现时出现位置过期的菜单）。**必须在第 2 步之后**：`dismiss_popup()` 会立即把弹出层从 PopupTree 中删除，而 `with_surfaces` 正是经 PopupTree 找弹出层的，先关菜单会漏清弹出层的缓存（陷阱 11；M3 实现时发现并调整顺序）。
+4. `self.niri.window_mru_ui.remove_window(id)`（MRU 已打开时删除旧缩略图，D2）。
 5. `queue_redraw_all()`。
 
 **持续兜底**：`Niri::update_primary_scanout_output()` 的窗口循环（约 4956 行）改为遍历 `windows_for_output(output).chain(layout.scratchpad_hidden_windows())`。隐藏窗口从不被呈现，任何输出渲染时都会清掉缓存。
@@ -768,6 +768,7 @@ RemoveWindowFromScratchpadById(u64),
 - `ScratchpadShowById(id)`：过滤器 `|m| m.id().get() == id`。
 - `RemoveWindowFromScratchpad` / `ById`。
 - 所有分支最后都调用 `queue_redraw_all()`。
+- 光标（M3 实现时补充，照 `State::focus_window()`）：`scratchpad-show` 执行前记下活动显示器；结果为 `Focused` / `Shown` 时，活动显示器变了就 `maybe_warp_cursor_to_focus_centered()`，不成功再 `move_cursor_to_output()`；没变就 `maybe_warp_cursor_to_focus()`。`RemoveWindowFromScratchpadById` 作用于隐藏窗口（隐藏 → 呈现并聚焦）时同样处理；无 id 版本作用于聚焦窗口，不可能是隐藏窗口，不处理。`Hidden` / `Nothing` 与 `move-window-to-scratchpad` 不动光标（同 `close-window`）。
 
 ### 5.4 命令行
 
