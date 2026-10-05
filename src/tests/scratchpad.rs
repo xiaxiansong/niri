@@ -8,6 +8,7 @@ use smithay::backend::renderer::element::{
     Id, PrimaryScanoutOutput, RenderElementPresentationState, RenderElementState,
     RenderElementStates,
 };
+use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel;
 use smithay::wayland::compositor::with_states;
 use tracing::field::Field;
@@ -476,4 +477,70 @@ fn following_window_moves_to_other_output_once() {
         output_events(&mut f, id, &surface),
         @"leave headless-1, enter headless-2"
     );
+}
+
+fn is_on_active_workspace_of(f: &mut Fixture, output: &Output, t: &str) -> bool {
+    let mon = f.niri().layout.monitor_for_output(output).unwrap();
+    let ws = mon.active_workspace_ref();
+    ws.windows().any(|mapped| title(mapped) == t)
+}
+
+fn hide_and_show(f: &mut Fixture, id: ClientId) {
+    f.niri_state()
+        .do_action(Action::MoveWindowToScratchpad, false);
+    f.double_roundtrip(id);
+    f.niri_state()
+        .do_action(Action::ScratchpadShow(None), false);
+    f.double_roundtrip(id);
+}
+
+#[test]
+fn shown_window_stays_on_output_when_workspace_moves_to_other_monitor() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.add_output(2, (1280, 720));
+    let output1 = f.niri_output(1);
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "a", None);
+    hide_and_show(&mut f, id);
+    let _ = output_events(&mut f, id, &surface);
+
+    f.niri_state()
+        .do_action(Action::MoveWorkspaceToMonitorRight, false);
+    f.double_roundtrip(id);
+    assert!(is_on_active_workspace_of(&mut f, &output1, "a"));
+    assert_snapshot!(output_events(&mut f, id, &surface), @"");
+}
+
+#[test]
+fn shown_window_stays_on_output_when_workspace_goes_back_to_its_output() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.add_output(2, (1280, 720));
+    let output1 = f.niri_output(1);
+    let output2 = f.niri_output(2);
+    let id = f.add_client();
+    f.niri_focus_output(2);
+    let _ = map_window(&mut f, id, "b", None);
+    let surface = map_window(&mut f, id, "a", None);
+
+    // Show the window on the workspace from output 2 after it moved to output 1.
+    f.niri_state()
+        .do_action(Action::MoveWindowToScratchpad, false);
+    f.double_roundtrip(id);
+    f.niri().remove_output(&output2);
+    f.niri_state().do_action(Action::FocusWorkspaceUp, false);
+    f.niri_state()
+        .do_action(Action::ScratchpadShow(None), false);
+    f.double_roundtrip(id);
+    assert!(is_on_active_workspace_of(&mut f, &output1, "a"));
+    assert!(is_on_active_workspace_of(&mut f, &output1, "b"));
+    let _ = output_events(&mut f, id, &surface);
+
+    // The workspace goes back to output 2, but the window stays.
+    f.niri().add_output(output2.clone(), None, false);
+    f.double_roundtrip(id);
+    assert!(is_on_active_workspace_of(&mut f, &output1, "a"));
+    assert!(is_on_active_workspace_of(&mut f, &output2, "b"));
+    assert_snapshot!(output_events(&mut f, id, &surface), @"");
 }

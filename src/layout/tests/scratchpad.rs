@@ -1048,3 +1048,373 @@ fn activated_window_keeps_focus_when_shown_window_follows() {
         );
     }
 }
+
+fn linear_switch_options() -> Options {
+    use niri_config::animations::{Curve, EasingParams, Kind};
+
+    const LINEAR: Kind = Kind::Easing(EasingParams {
+        duration_ms: 1000,
+        curve: Curve::Linear,
+    });
+
+    let mut options = Options::default();
+    options.animations.workspace_switch.0.kind = LINEAR;
+    options.animations.overview_open_close.0.kind = LINEAR;
+    options
+}
+
+/// A tiled window 1 and a shown scratchpad window 2 at 100, 50 with size 100 × 200.
+fn shown_window_at_100_50() -> Vec<Op> {
+    vec![
+        Op::AddOutput(1),
+        window(1, 100),
+        floating_window(2),
+        Op::Communicate(2),
+        Op::MoveFloatingWindow {
+            id: Some(2),
+            x: PositionChange::SetFixed(100.),
+            y: PositionChange::SetFixed(50.),
+            animate: false,
+        },
+        hide(2),
+        toggle(),
+        Op::Communicate(2),
+        Op::CompleteAnimations,
+    ]
+}
+
+fn output1(layout: &Layout<TestWindow>) -> Output {
+    layout
+        .outputs()
+        .find(|o| o.name() == "output1")
+        .unwrap()
+        .clone()
+}
+
+fn hit(layout: &Layout<TestWindow>, x: f64, y: f64) -> String {
+    let output = output1(layout);
+    match layout.window_under(&output, Point::from((x, y))) {
+        None => String::from("none"),
+        Some((win, HitType::Input { win_pos })) => {
+            format!("{} input at {} {}", win.0.id, win_pos.x, win_pos.y)
+        }
+        Some((win, HitType::Activate { .. })) => format!("{} activate", win.0.id),
+    }
+}
+
+/// Position of the window on the output, as it is rendered.
+fn visual_pos(layout: &Layout<TestWindow>, id: usize) -> Point<f64, Logical> {
+    let mon = layout.monitors().next().unwrap();
+
+    if let Some(pin_geo) = mon.scratchpad_pin_geo() {
+        let ws = mon.active_workspace_ref();
+        if let Some((_, pos)) = ws
+            .scratchpad_tiles_with_render_positions()
+            .find(|(tile, _)| tile.window().0.id == id)
+        {
+            return pin_geo.loc + pos;
+        }
+    }
+
+    let zoom = mon.overview_zoom();
+    mon.workspaces_with_render_geo_cull(false)
+        .find_map(|(ws, geo)| {
+            ws.tiles_with_render_positions()
+                .find(|(tile, _, _)| tile.window().0.id == id)
+                .map(|(_, pos, _)| geo.loc + pos.upscale(zoom))
+        })
+        .unwrap()
+}
+
+#[track_caller]
+fn assert_close(a: Point<f64, Logical>, b: Point<f64, Logical>, tolerance: f64) {
+    let diff = a - b;
+    assert!(
+        diff.x.abs() <= tolerance && diff.y.abs() <= tolerance,
+        "{a:?} is not within {tolerance} of {b:?}"
+    );
+}
+
+#[test]
+fn shown_window_is_pinned_during_workspace_switch() {
+    let mut layout = check_ops_with_options(linear_switch_options(), shown_window_at_100_50());
+    assert_snapshot!(hit(&layout, 150., 150.), @"2 activate");
+
+    // Halfway through the switch, the new workspace is at y = 396, but the window stays in place.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspaceDown,
+            Op::AdvanceAnimations { msec_delta: 500 },
+        ],
+    );
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[2] []");
+    assert_snapshot!(hit(&layout, 150., 150.), @"2 activate");
+    // Where the window would be if it moved together with its workspace.
+    assert_snapshot!(hit(&layout, 150., 546.), @"none");
+
+    let output = output1(&layout);
+    assert_eq!(
+        layout.resize_edges_under(&output, Point::from((105., 55.))),
+        Some(ResizeEdge::TOP | ResizeEdge::LEFT)
+    );
+    assert_eq!(
+        layout.resize_edges_under(&output, Point::from((105., 451.))),
+        None
+    );
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_snapshot!(hit(&layout, 150., 150.), @"2 activate");
+}
+
+#[test]
+fn shown_window_is_pinned_during_workspace_switch_gesture() {
+    let mut ops = shown_window_at_100_50();
+    ops.extend([
+        Op::WorkspaceSwitchGestureBegin {
+            output_idx: 1,
+            is_touchpad: false,
+        },
+        Op::WorkspaceSwitchGestureUpdate {
+            delta: 396.,
+            timestamp: Duration::ZERO,
+            is_touchpad: false,
+        },
+    ]);
+    let mut layout = check_ops_with_options(linear_switch_options(), ops);
+    assert_snapshot!(workspaces(&layout), @"output1: *[1, 2] []");
+    assert_snapshot!(hit(&layout, 150., 150.), @"2 activate");
+
+    // The old workspace with the window goes entirely off-screen.
+    check_ops_on_layout(
+        &mut layout,
+        [Op::WorkspaceSwitchGestureUpdate {
+            delta: 396.,
+            timestamp: Duration::ZERO,
+            is_touchpad: false,
+        }],
+    );
+    assert_snapshot!(hit(&layout, 150., 150.), @"2 activate");
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::WorkspaceSwitchGestureEnd {
+                is_touchpad: Some(false),
+            },
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[2] []");
+    assert_snapshot!(hit(&layout, 150., 150.), @"2 activate");
+}
+
+#[test]
+fn pin_geometry_matches_workspace_at_rest() {
+    let mut ops = shown_window_at_100_50();
+    ops[0] = Op::AddScaledOutput {
+        id: 1,
+        scale: 1.5,
+        layout_config: None,
+    };
+    let mut layout = check_ops_with_options(linear_switch_options(), ops);
+
+    let mon = layout.monitors().next().unwrap();
+    assert_eq!(mon.scratchpad_pin_geo(), None);
+    let rest = mon.workspaces_render_geo().next().unwrap();
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspaceDown,
+            Op::AdvanceAnimations { msec_delta: 300 },
+        ],
+    );
+    let mon = layout.monitors().next().unwrap();
+    assert_eq!(mon.scratchpad_pin_geo(), Some(rest));
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    let mon = layout.monitors().next().unwrap();
+    assert_eq!(mon.scratchpad_pin_geo(), None);
+    assert_eq!(mon.workspaces_render_geo().nth(1).unwrap(), rest);
+}
+
+#[test]
+fn pinned_window_hidden_behind_fullscreen_is_not_hit() {
+    let mut layout = check_ops_with_options(
+        linear_switch_options(),
+        [
+            Op::AddOutput(1),
+            window(1, 100),
+            Op::FocusWorkspaceDown,
+            window(3, 100),
+            Op::FullscreenWindow(3),
+            Op::Communicate(3),
+            Op::FocusWorkspaceUp,
+            floating_window(2),
+            Op::Communicate(2),
+            Op::MoveFloatingWindow {
+                id: Some(2),
+                x: PositionChange::SetFixed(100.),
+                y: PositionChange::SetFixed(50.),
+                animate: false,
+            },
+            hide(2),
+            toggle(),
+            Op::Communicate(2),
+            Op::FocusTiling,
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(1)");
+
+    // The unfocused window follows to a workspace with a focused fullscreen window, where floating
+    // windows aren't visible. At 90% of the switch, that workspace is at y = 79.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspaceDown,
+            Op::AdvanceAnimations { msec_delta: 900 },
+        ],
+    );
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(3)");
+    assert_snapshot!(hit(&layout, 150., 150.), @"3 activate");
+}
+
+#[test]
+fn interactive_move_of_pinned_window_starts_at_pinned_position() {
+    let mut ops = shown_window_at_100_50();
+    ops.extend([
+        Op::FocusWorkspaceDown,
+        Op::AdvanceAnimations { msec_delta: 500 },
+        Op::InteractiveMoveBegin {
+            window: 2,
+            output_idx: 1,
+            px: 150.,
+            py: 150.,
+        },
+    ]);
+    let layout = check_ops_with_options(linear_switch_options(), ops);
+
+    let Some(InteractiveMoveState::Starting {
+        pointer_ratio_within_window,
+        ..
+    }) = &layout.interactive_move
+    else {
+        panic!("interactive move must have started");
+    };
+    assert_eq!(*pointer_ratio_within_window, (0.5, 0.5));
+}
+
+#[test]
+fn following_window_keeps_screen_position() {
+    // Same working area: the position is restored as is.
+    let mut ops = shown_window_at_100_50();
+    ops.extend([Op::FocusWorkspaceDown, Op::CompleteAnimations]);
+    let layout = check_ops(ops);
+    assert_snapshot!(floating_geometry(&layout, 2), @"pos: 100 50, size: 100 200");
+
+    // The target workspace has a top strut, so its working area starts at y = 100.
+    let struts = niri_config::LayoutPart {
+        struts: Some(niri_config::Struts {
+            top: FloatOrInt(100.),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddNamedWorkspace {
+            ws_name: 1,
+            output_names: vec![1],
+            layout_config: Some(Box::new(struts)),
+        },
+        floating_window(2),
+        Op::Communicate(2),
+        Op::MoveFloatingWindow {
+            id: Some(2),
+            x: PositionChange::SetFixed(100.),
+            y: PositionChange::SetFixed(50.),
+            animate: false,
+        },
+        hide(2),
+        toggle(),
+        Op::Communicate(2),
+        Op::FocusWorkspaceUp,
+        Op::CompleteAnimations,
+    ]);
+    assert_snapshot!(workspaces(&layout), @"output1: *[2] []");
+    assert_snapshot!(floating_geometry(&layout, 2), @"pos: 100 50, size: 100 200");
+}
+
+#[test]
+fn following_window_slides_in_overview() {
+    let mut ops = shown_window_at_100_50();
+    ops.extend([Op::ToggleOverview, Op::CompleteAnimations]);
+    let mut layout = check_ops_with_options(linear_switch_options(), ops);
+    let before = visual_pos(&layout, 2);
+
+    check_ops_on_layout(&mut layout, [Op::FocusWorkspaceDown]);
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[2] []");
+    assert_close(visual_pos(&layout, 2), before, 1.);
+
+    // The window moves together with the workspace switch, so it stays in place.
+    check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 500 }]);
+    let mon = layout.monitors().next().unwrap();
+    let tile = mon
+        .active_workspace_ref()
+        .floating()
+        .tiles()
+        .next()
+        .unwrap();
+    assert!(tile.is_moving_between_workspaces());
+    assert_close(visual_pos(&layout, 2), before, 1.5);
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_close(visual_pos(&layout, 2), before, 1.);
+
+    // Not pinned in the overview, and only activation hits.
+    let mon = layout.monitors().next().unwrap();
+    assert_eq!(mon.scratchpad_pin_geo(), None);
+    let zoom = mon.overview_zoom();
+    let center = before + Point::from((50., 100.)).upscale(zoom);
+    assert_snapshot!(hit(&layout, center.x, center.y), @"2 activate");
+}
+
+#[test]
+fn pinned_window_is_handed_over_to_overview() {
+    // The overview opens during a workspace switch.
+    let mut ops = shown_window_at_100_50();
+    ops.extend([
+        Op::FocusWorkspaceDown,
+        Op::AdvanceAnimations { msec_delta: 300 },
+    ]);
+    let mut layout = check_ops_with_options(linear_switch_options(), ops);
+    let before = visual_pos(&layout, 2);
+    assert_close(before, Point::from((100., 50.)), 0.);
+
+    check_ops_on_layout(&mut layout, [Op::ToggleOverview]);
+    let mon = layout.monitors().next().unwrap();
+    assert_eq!(mon.scratchpad_pin_geo(), None);
+    assert_close(visual_pos(&layout, 2), before, 1.);
+
+    // The overview finishes closing during a workspace switch.
+    let mut ops = shown_window_at_100_50();
+    ops.extend([
+        Op::ToggleOverview,
+        Op::CompleteAnimations,
+        Op::ToggleOverview,
+        Op::AdvanceAnimations { msec_delta: 500 },
+        Op::FocusWorkspaceDown,
+        Op::AdvanceAnimations { msec_delta: 499 },
+    ]);
+    let mut layout = check_ops_with_options(linear_switch_options(), ops);
+    let mon = layout.monitors().next().unwrap();
+    assert_eq!(mon.scratchpad_pin_geo(), None);
+    let before = visual_pos(&layout, 2);
+
+    check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 1 }]);
+    let mon = layout.monitors().next().unwrap();
+    assert!(mon.scratchpad_pin_geo().is_some());
+    assert_close(visual_pos(&layout, 2), before, 3.);
+}
