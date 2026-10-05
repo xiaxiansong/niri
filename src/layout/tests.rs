@@ -14,6 +14,7 @@ use smithay::utils::Rectangle;
 use super::*;
 
 mod animations;
+mod fill_view;
 mod fullscreen;
 
 impl<W: LayoutElement> Default for Layout<W> {
@@ -4006,6 +4007,7 @@ prop_compose! {
         tab_indicator in prop::option::of(arbitrary_tab_indicator()),
         center_focused_column in prop::option::of(arbitrary_center_focused_column()),
         always_center_single_column in prop::option::of(any::<bool>().prop_map(Flag)),
+        fill_view_after_removal in prop::option::of(any::<bool>().prop_map(Flag)),
         empty_workspace_above_first in prop::option::of(any::<bool>().prop_map(Flag)),
     ) -> niri_config::LayoutPart {
         niri_config::LayoutPart {
@@ -4013,6 +4015,7 @@ prop_compose! {
             struts,
             center_focused_column,
             always_center_single_column,
+            fill_view_after_removal,
             empty_workspace_above_first,
             focus_ring,
             border,
