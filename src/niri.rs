@@ -2365,6 +2365,7 @@ impl State {
         to_introspect: &async_channel::Sender<NiriToIntrospect>,
         msg: IntrospectToNiri,
     ) {
+        use crate::layout::ScratchpadState;
         use crate::utils::with_toplevel_role;
 
         let IntrospectToNiri::GetWindows = msg;
@@ -2382,6 +2383,11 @@ impl State {
         );
 
         self.niri.layout.with_windows(|mapped, _, _, _| {
+            // Hiding a window stops its screencasts, so don't offer hidden windows either.
+            if mapped.scratchpad_state() == ScratchpadState::Hidden {
+                return;
+            }
+
             let id = mapped.id().get();
             let props = with_toplevel_role(mapped.toplevel(), |role| {
                 gnome_shell_introspect::WindowProperties {

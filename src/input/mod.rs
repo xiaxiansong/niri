@@ -48,7 +48,7 @@ use self::spatial_movement_grab::SpatialMovementGrab;
 #[cfg(feature = "dbus")]
 use crate::dbus::freedesktop_a11y::KbMonBlock;
 use crate::layout::scrolling::ScrollDirection;
-use crate::layout::{ActivateWindow, LayoutElement as _};
+use crate::layout::{ActivateWindow, LayoutElement as _, ScratchpadState};
 use crate::niri::{CastTarget, PointerVisibility, State};
 use crate::ui::mru::{WindowMru, WindowMruUi};
 use crate::ui::screenshot_ui::ScreenshotUi;
@@ -911,6 +911,7 @@ impl State {
                     .windows()
                     .map(|(_, win)| win)
                     .filter(|win| Some(win.id()) != current)
+                    .filter(|win| win.scratchpad_state() != ScratchpadState::Hidden)
                     .max_by_key(|win| win.get_focus_timestamp())
                     .map(|win| win.window.clone())
                 {
@@ -2325,7 +2326,9 @@ impl State {
             }
             Action::SetDynamicCastWindowById(id) => {
                 let layout = &self.niri.layout;
-                if layout.windows().any(|(_, mapped)| mapped.id().get() == id) {
+                if layout.windows().any(|(_, mapped)| {
+                    mapped.id().get() == id && mapped.scratchpad_state() != ScratchpadState::Hidden
+                }) {
                     self.set_dynamic_cast_target(CastTarget::Window { id });
                 }
             }
