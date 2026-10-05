@@ -408,3 +408,72 @@ fn screencast_window_list_skips_hidden_windows() {
     assert!(windows.contains_key(&a));
     assert!(!windows.contains_key(&b));
 }
+
+fn output_events(f: &mut Fixture, id: ClientId, surface: &WlSurface) -> String {
+    let events: Vec<_> = f
+        .client(id)
+        .state
+        .recent_output_events(surface)
+        .map(|event| event.to_string())
+        .collect();
+    events.join(", ")
+}
+
+fn is_on_active_workspace(f: &mut Fixture, t: &str) -> bool {
+    let ws = f.niri().layout.active_workspace().unwrap();
+    ws.windows().any(|mapped| title(mapped) == t)
+}
+
+#[test]
+fn following_window_stays_on_output() {
+    let (mut f, id) = set_up();
+    let surface = map_window(&mut f, id, "a", None);
+
+    // Hiding leaves the output, and showing enters it again.
+    f.niri_state()
+        .do_action(Action::MoveWindowToScratchpad, false);
+    f.double_roundtrip(id);
+    f.niri_state()
+        .do_action(Action::ScratchpadShow(None), false);
+    f.double_roundtrip(id);
+    assert_snapshot!(
+        output_events(&mut f, id, &surface),
+        @"enter headless-1, leave headless-1, enter headless-1"
+    );
+
+    // Following to another workspace on the same output doesn't leave and enter the output.
+    f.niri_state().do_action(Action::FocusWorkspaceDown, false);
+    f.double_roundtrip(id);
+    assert!(is_on_active_workspace(&mut f, "a"));
+    f.niri_state().do_action(Action::FocusWorkspaceUp, false);
+    f.double_roundtrip(id);
+    assert!(is_on_active_workspace(&mut f, "a"));
+    assert_snapshot!(output_events(&mut f, id, &surface), @"");
+}
+
+#[test]
+fn following_window_moves_to_other_output_once() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.add_output(2, (1280, 720));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "a", None);
+
+    f.niri_state()
+        .do_action(Action::MoveWindowToScratchpad, false);
+    f.double_roundtrip(id);
+    f.niri_state()
+        .do_action(Action::ScratchpadShow(None), false);
+    f.double_roundtrip(id);
+    let _ = output_events(&mut f, id, &surface);
+
+    // The workspace moves to the other output, then the window follows to its active workspace.
+    let output = f.niri_output(1);
+    f.niri().remove_output(&output);
+    f.double_roundtrip(id);
+    assert!(is_on_active_workspace(&mut f, "a"));
+    assert_snapshot!(
+        output_events(&mut f, id, &surface),
+        @"leave headless-1, enter headless-2"
+    );
+}

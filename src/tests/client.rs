@@ -107,6 +107,15 @@ pub struct Seat {
 pub struct Surface {
     pub keyboard_events_received: Vec<KeyboardEvent>,
     pub keyboard_events_looked_at: usize,
+    pub output_events_received: Vec<OutputEvent>,
+    pub output_events_looked_at: usize,
+}
+
+/// `wl_surface.enter` and `leave` with the output name.
+#[derive(Debug)]
+pub enum OutputEvent {
+    Enter(String),
+    Leave(String),
 }
 
 #[derive(Debug)]
@@ -212,6 +221,15 @@ impl fmt::Display for KeyboardEvent {
             }
         }
         Ok(())
+    }
+}
+
+impl fmt::Display for OutputEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OutputEvent::Enter(name) => write!(f, "enter {name}"),
+            OutputEvent::Leave(name) => write!(f, "leave {name}"),
+        }
     }
 }
 
@@ -337,6 +355,8 @@ impl State {
             Surface {
                 keyboard_events_received: Vec::new(),
                 keyboard_events_looked_at: 0,
+                output_events_received: Vec::new(),
+                output_events_looked_at: 0,
             },
         );
         surface
@@ -423,6 +443,14 @@ impl State {
     ) -> impl Iterator<Item = &KeyboardEvent> + '_ {
         let surface = self.surfaces.get_mut(surface).unwrap();
         surface.recent_keyboard_events()
+    }
+
+    pub fn recent_output_events(
+        &mut self,
+        surface: &WlSurface,
+    ) -> impl Iterator<Item = &OutputEvent> + '_ {
+        let surface = self.surfaces.get_mut(surface).unwrap();
+        surface.recent_output_events()
     }
 
     pub fn inhibit_shortcuts(&self, surface: &WlSurface) -> ZwpKeyboardShortcutsInhibitorV1 {
@@ -588,6 +616,12 @@ impl Surface {
         let start = self.keyboard_events_looked_at;
         self.keyboard_events_looked_at = self.keyboard_events_received.len();
         self.keyboard_events_received[start..].iter()
+    }
+
+    pub fn recent_output_events(&mut self) -> impl Iterator<Item = &OutputEvent> {
+        let start = self.output_events_looked_at;
+        self.output_events_looked_at = self.output_events_received.len();
+        self.output_events_received[start..].iter()
     }
 }
 
@@ -843,16 +877,24 @@ wayland_client::delegate_noop!(State: ZwlrVirtualPointerV1);
 
 impl Dispatch<WlSurface, ()> for State {
     fn event(
-        _state: &mut Self,
-        _proxy: &WlSurface,
+        state: &mut Self,
+        surface: &WlSurface,
         event: <WlSurface as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
         match event {
-            wl_surface::Event::Enter { .. } => (),
-            wl_surface::Event::Leave { .. } => (),
+            wl_surface::Event::Enter { output } => {
+                let event = OutputEvent::Enter(state.outputs[&output].clone());
+                let surface = state.surfaces.get_mut(surface).unwrap();
+                surface.output_events_received.push(event);
+            }
+            wl_surface::Event::Leave { output } => {
+                let event = OutputEvent::Leave(state.outputs[&output].clone());
+                let surface = state.surfaces.get_mut(surface).unwrap();
+                surface.output_events_received.push(event);
+            }
             wl_surface::Event::PreferredBufferScale { .. } => (),
             wl_surface::Event::PreferredBufferTransform { .. } => (),
             _ => unreachable!(),
