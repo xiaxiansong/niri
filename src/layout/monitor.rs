@@ -1180,12 +1180,23 @@ impl<W: LayoutElement> Monitor<W> {
             .as_ref()
             .and_then(|hint| hint.workspace.existing_id());
 
+        let pin_scratchpad = self.scratchpad_pin_geo().is_some();
+        if pin_scratchpad {
+            // Pinned windows are visible even when their workspace is culled.
+            let ws = &mut self.workspaces[self.active_workspace_idx];
+            ws.update_render_elements(is_active, RenderLayer::PinnedScratchpad, true);
+        }
+
         for ws in &mut self.workspaces {
-            ws.update_render_elements(is_active, RenderLayer::MovingBetweenWorkspaces);
+            ws.update_render_elements(
+                is_active,
+                RenderLayer::MovingBetweenWorkspaces,
+                pin_scratchpad,
+            );
         }
 
         for (ws, geo) in self.workspaces_with_render_geo_mut(true) {
-            ws.update_render_elements(is_active, RenderLayer::Normal);
+            ws.update_render_elements(is_active, RenderLayer::Normal, pin_scratchpad);
 
             if Some(ws.id()) == insert_hint_ws_id {
                 insert_hint_ws_geo = Some(geo);
@@ -1595,6 +1606,23 @@ impl<W: LayoutElement> Monitor<W> {
         })
     }
 
+    /// Geometry to render and hit-test the shown scratchpad windows of the active workspace with,
+    /// when they are pinned to the screen.
+    ///
+    /// They are pinned during a workspace switch outside the overview, at the place where the
+    /// active workspace is at rest.
+    pub fn scratchpad_pin_geo(&self) -> Option<Rectangle<f64, Logical>> {
+        if self.overview_progress.is_some() || self.workspace_switch.is_none() {
+            return None;
+        }
+
+        let ws_size = self.workspace_size(1.);
+        Some(Rectangle::new(
+            self.workspace_static_offset(ws_size),
+            ws_size,
+        ))
+    }
+
     pub fn workspaces_with_render_geo_cull(
         &self,
         cull: bool,
@@ -1798,6 +1826,32 @@ impl<W: LayoutElement> Monitor<W> {
             )
         };
 
+        let pin_geo = self.scratchpad_pin_geo();
+        let pin_scratchpad = pin_geo.is_some();
+
+        // Shown scratchpad windows pinned to the screen go on top, uncropped.
+        if let Some(geo) = pin_geo {
+            let ws = &self.workspaces[self.active_workspace_idx];
+            let crop_bounds = Rectangle::new(
+                Point::from((-i32::MAX / 2, -i32::MAX / 2)),
+                Size::from((i32::MAX, i32::MAX)),
+            );
+            ws.render_floating(
+                ctx.r(),
+                XrayPos::new(geo.loc, 1.),
+                focus_ring,
+                RenderLayer::PinnedScratchpad,
+                true,
+                &mut |elem| {
+                    let elem = CropRenderElement::from_element(elem, scale, crop_bounds);
+                    if let Some(elem) = elem {
+                        let elem = MonitorInnerRenderElement::from(elem);
+                        push(scale_relocate(geo, elem));
+                    }
+                },
+            );
+        }
+
         // Draw in passes for correct Z ordering during window movement between workspaces:
         // - floating windows moving between workspaces
         // - normal floating windows
@@ -1860,6 +1914,7 @@ impl<W: LayoutElement> Monitor<W> {
                             xray_pos,
                             focus_ring,
                             RenderLayer::MovingBetweenWorkspaces,
+                            pin_scratchpad,
                             push!(),
                         );
                     }
@@ -1869,6 +1924,7 @@ impl<W: LayoutElement> Monitor<W> {
                             xray_pos,
                             focus_ring,
                             RenderLayer::Normal,
+                            pin_scratchpad,
                             push!(),
                         );
 

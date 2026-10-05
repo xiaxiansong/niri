@@ -611,11 +611,13 @@ struct OverviewGesture {
 }
 
 /// Layer of windows to render.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RenderLayer {
     Normal,
     /// Windows currently moving between workspaces.
     MovingBetweenWorkspaces,
+    /// Shown scratchpad windows pinned to the screen during a workspace switch.
+    PinnedScratchpad,
 }
 
 impl SizingMode {

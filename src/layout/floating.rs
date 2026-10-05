@@ -271,11 +271,12 @@ impl<W: LayoutElement> FloatingSpace<W> {
         is_active: bool,
         view_rect: Rectangle<f64, Logical>,
         layer: RenderLayer,
+        pin_scratchpad: bool,
     ) {
         let active = self.active_window_id.clone();
         for (tile, offset) in self.tiles_with_offsets_mut() {
             // Skip tiles belonging to a different render layer.
-            if layer.is_normal() == tile.is_moving_between_workspaces() {
+            if tile_render_layer(tile, pin_scratchpad) != layer {
                 continue;
             }
 
@@ -1065,6 +1066,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         true
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
@@ -1072,6 +1074,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         view_rect: Rectangle<f64, Logical>,
         focus_ring: bool,
         layer: RenderLayer,
+        pin_scratchpad: bool,
         push: &mut dyn FnMut(FloatingSpaceRenderElement<R>),
     ) {
         let scale = Scale::from(self.scale);
@@ -1089,7 +1092,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let active = self.active_window_id.clone();
         for (tile, tile_pos) in self.tiles_with_render_positions() {
             // Skip tiles belonging to a different render layer.
-            if layer.is_normal() == tile.is_moving_between_workspaces() {
+            if tile_render_layer(tile, pin_scratchpad) != layer {
                 continue;
             }
 
@@ -1426,5 +1429,18 @@ fn resolve_preset_size(preset: PresetSize, view_size: f64) -> ResolvedSize {
     match preset {
         PresetSize::Proportion(proportion) => ResolvedSize::Tile(view_size * proportion),
         PresetSize::Fixed(width) => ResolvedSize::Window(f64::from(width)),
+    }
+}
+
+/// Returns the render layer of a floating tile.
+///
+/// With `pin_scratchpad`, shown scratchpad tiles go into their own layer pinned to the screen.
+fn tile_render_layer<W: LayoutElement>(tile: &Tile<W>, pin_scratchpad: bool) -> RenderLayer {
+    if pin_scratchpad && tile.in_scratchpad {
+        RenderLayer::PinnedScratchpad
+    } else if tile.is_moving_between_workspaces() {
+        RenderLayer::MovingBetweenWorkspaces
+    } else {
+        RenderLayer::Normal
     }
 }

@@ -378,15 +378,24 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.are_transitions_ongoing() || self.floating.are_transitions_ongoing()
     }
 
-    pub fn update_render_elements(&mut self, is_active: bool, layer: RenderLayer) {
-        self.scrolling
-            .update_render_elements(is_active && !self.floating_is_active.get(), layer);
+    pub fn update_render_elements(
+        &mut self,
+        is_active: bool,
+        layer: RenderLayer,
+        pin_scratchpad: bool,
+    ) {
+        // The scrolling layout has no scratchpad windows.
+        if layer != RenderLayer::PinnedScratchpad {
+            self.scrolling
+                .update_render_elements(is_active && !self.floating_is_active.get(), layer);
+        }
 
         let view_rect = Rectangle::from_size(self.view_size);
         self.floating.update_render_elements(
             is_active && self.floating_is_active.get(),
             view_rect,
             layer,
+            pin_scratchpad,
         );
 
         if layer.is_normal() {
@@ -1791,9 +1800,10 @@ impl<W: LayoutElement> Workspace<W> {
         xray_pos: XrayPos,
         focus_ring: bool,
         layer: RenderLayer,
+        pin_scratchpad: bool,
         push: &mut dyn FnMut(WorkspaceRenderElement<R>),
     ) {
-        if !self.is_floating_visible() && layer.is_normal() {
+        if !self.is_floating_visible() && layer != RenderLayer::MovingBetweenWorkspaces {
             return;
         }
 
@@ -1805,6 +1815,7 @@ impl<W: LayoutElement> Workspace<W> {
             view_rect,
             floating_focus_ring,
             layer,
+            pin_scratchpad,
             &mut |elem| push(elem.into()),
         );
     }
