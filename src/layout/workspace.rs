@@ -817,6 +817,10 @@ impl<W: LayoutElement> Workspace<W> {
         Some(column)
     }
 
+    pub fn fill_view_after_removal(&mut self) {
+        self.scrolling.fill_view_after_removal();
+    }
+
     pub fn resolve_default_width(
         &self,
         default_width: Option<Option<PresetSize>>,

@@ -1275,6 +1275,43 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         column
     }
 
+    /// Scrolls the view to remove empty space past the first or the last column.
+    ///
+    /// Call this after a tile or a column has left the scrolling layout.
+    pub fn fill_view_after_removal(&mut self) {
+        if !self.options.layout.fill_view_after_removal {
+            return;
+        }
+
+        if self.columns.is_empty()
+            || self.view_offset.is_gesture()
+            || self.interactive_resize.is_some()
+        {
+            return;
+        }
+
+        // Don't move the view away from fullscreen or maximized columns, including ones that are
+        // about to stop being fullscreen.
+        let col = &self.columns[self.active_column_idx];
+        if !col.sizing_mode().is_normal() || !col.pending_sizing_mode().is_normal() {
+            return;
+        }
+
+        let Some((left, right)) = self.edge_snaps() else {
+            return;
+        };
+
+        // If all columns fit on screen, left can be > right. Check this explicitly since
+        // f64::clamp() panics when min > max.
+        let new_pos = if left >= right {
+            left
+        } else {
+            self.target_view_pos().clamp(left, right)
+        };
+        let new_offset = new_pos - self.column_x(self.active_column_idx);
+        self.animate_view_offset(self.active_column_idx, new_offset);
+    }
+
     pub fn update_window(&mut self, window: &W::Id, serial: Option<Serial>) {
         let (col_idx, column) = self
             .columns
