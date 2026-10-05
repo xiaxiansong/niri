@@ -549,6 +549,27 @@ fn make_ipc_window(
     })
 }
 
+#[cfg(test)]
+impl State {
+    /// Returns the windows as tracked by the event stream, and as computed from the layout.
+    pub fn ipc_windows_from_events_and_layout(
+        &self,
+    ) -> (Vec<niri_ipc::Window>, Vec<niri_ipc::Window>) {
+        let server = self.niri.ipc_server.as_ref().unwrap();
+        let state = server.event_stream_state.borrow();
+        let mut from_events: Vec<_> = state.windows.windows.values().cloned().collect();
+        from_events.sort_by_key(|win| win.id);
+
+        let mut from_layout = Vec::new();
+        self.niri.layout.with_windows(|mapped, _, ws_id, layout| {
+            from_layout.push(make_ipc_window(mapped, ws_id, layout));
+        });
+        from_layout.sort_by_key(|win| win.id);
+
+        (from_events, from_layout)
+    }
+}
+
 impl State {
     pub fn ipc_keyboard_layouts_changed(&mut self) {
         let keyboard = self.niri.seat.get_keyboard().unwrap();
