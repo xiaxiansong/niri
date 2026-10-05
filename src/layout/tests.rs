@@ -646,18 +646,17 @@ enum Op {
         y: PositionChange,
         animate: bool,
     },
-    // FIXME: generate these once the rest of the layout handles hidden scratchpad windows.
-    #[proptest(skip)]
     MoveWindowToScratchpad {
+        #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
     },
     /// Toggles the scratchpad windows with this id, or all of them if `None`.
-    #[proptest(skip)]
     ToggleScratchpad {
+        #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
     },
-    #[proptest(skip)]
     RemoveWindowFromScratchpad {
+        #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
     },
     SetParent {
@@ -960,6 +959,16 @@ impl Op {
                     }
                 }
 
+                for win in layout.scratchpad_hidden_windows() {
+                    if win.0.id == params.id {
+                        return;
+                    }
+
+                    if win.0.id == next_to_id {
+                        found_next_to = true;
+                    }
+                }
+
                 match &mut layout.monitor_set {
                     MonitorSet::Normal { monitors, .. } => {
                         for mon in monitors {
@@ -1024,6 +1033,10 @@ impl Op {
                     if move_.tile.window().0.id == params.id {
                         return;
                     }
+                }
+
+                if layout.is_scratchpad_hidden(&params.id) {
+                    return;
                 }
 
                 match &mut layout.monitor_set {
@@ -1427,6 +1440,14 @@ impl Op {
                         move_.tile.window().0.parent_id.set(new_parent_id);
                         update = true;
                     }
+                }
+
+                if let Some(win) = layout
+                    .scratchpad_hidden_windows()
+                    .find(|win| win.0.id == id)
+                {
+                    win.0.parent_id.set(new_parent_id);
+                    update = true;
                 }
 
                 match &mut layout.monitor_set {
