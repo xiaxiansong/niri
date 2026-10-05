@@ -713,7 +713,9 @@ M2a 先以 `#[proptest(skip)]` 加入（确定性用例可用、不参与随机�
 | 20 | 同一窗口连续两次隐藏 | 第二次无操作，不重复入队 |
 | 21 | 隐藏中 `remove-window-from-scratchpad` | 在当前工作区成为普通浮动窗口并聚焦 |
 
-**客户端集成测试**（`src/tests/`，用现有 `Fixture`；可放到 M3 末尾）：隐藏后客户端继续提交与 ack configure；隐藏中取消映射；隐藏窗口创建带 parent 的 toplevel；IPC 事件流重建的状态等于完整查询（Shown→None 必须产生事件）。
+**客户端集成测试**（`src/tests/`，用现有 `Fixture`；可放到 M3 末尾）：隐藏后客户端继续提交与 ack configure；隐藏中取消映射；隐藏窗口创建带 parent 的 toplevel；IPC 事件流状态与按 layout 重算的结果一致（Shown→None 必须产生事件）。
+
+IPC 用例的比较对象（M3 实现时修订）：完整查询 `Request::Windows` 本身读的就是 `event_stream_state`（`server.rs` 约 289 行），与事件流重建的状态恒等，测不出陷阱 10。改为在 `src/ipc/server.rs` 加一个 `#[cfg(test)]` 方法，返回两份窗口列表：`event_stream_state` 中的（只经事件更新）与经 `with_windows()` + `make_ipc_window()` 现算的；测试中序列化为 JSON 后整体比较（`niri_ipc::Window` 无 `PartialEq`），覆盖 None→Hidden→Shown→None 每一步。
 
 **手动测试**：foot/kitty 下拉终端；Firefox（多弹窗、通知激活）；Spotify/Electron（自绘弹窗）；KeePassXC（对话框、托盘：确认 D11 的表现）；视频播放器隐藏后能正常息屏；DMS/bar 的窗口列表与任务栏点击；两块不同缩放的显示器之间呈现与插拔；MRU 打开时用 IPC 隐藏窗口。
 
