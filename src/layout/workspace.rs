@@ -848,7 +848,6 @@ impl<W: LayoutElement> Workspace<W> {
         }
 
         let focused = self.active_window().map(|win| win.id().clone());
-        let working_area = self.working_area;
 
         let tiles = taken
             .into_iter()
@@ -859,7 +858,6 @@ impl<W: LayoutElement> Workspace<W> {
                     tile: removed.tile,
                     was_focused,
                     pos,
-                    working_area,
                 }
             })
             .collect();
@@ -2260,8 +2258,6 @@ pub struct TakenScratchpadTile<W: LayoutElement> {
     pub was_focused: bool,
     /// Its position in the workspace it was taken from.
     pub pos: Point<f64, Logical>,
-    /// Working area of the workspace it was taken from.
-    pub working_area: Rectangle<f64, Logical>,
 }
 
 /// Returns the resize edges for a point within the tile, or `None` if the point doesn't hit it.

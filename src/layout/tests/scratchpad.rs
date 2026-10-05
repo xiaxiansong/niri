@@ -1308,42 +1308,10 @@ fn interactive_move_of_pinned_window_starts_at_pinned_position() {
 
 #[test]
 fn following_window_keeps_screen_position() {
-    // Same working area: the position is restored as is.
     let mut ops = shown_window_at_100_50();
     ops.extend([Op::FocusWorkspaceDown, Op::CompleteAnimations]);
     let layout = check_ops(ops);
-    assert_snapshot!(floating_geometry(&layout, 2), @"pos: 100 50, size: 100 200");
-
-    // The target workspace has a top strut, so its working area starts at y = 100.
-    let struts = niri_config::LayoutPart {
-        struts: Some(niri_config::Struts {
-            top: FloatOrInt(100.),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let layout = check_ops([
-        Op::AddOutput(1),
-        Op::AddNamedWorkspace {
-            ws_name: 1,
-            output_names: vec![1],
-            layout_config: Some(Box::new(struts)),
-        },
-        floating_window(2),
-        Op::Communicate(2),
-        Op::MoveFloatingWindow {
-            id: Some(2),
-            x: PositionChange::SetFixed(100.),
-            y: PositionChange::SetFixed(50.),
-            animate: false,
-        },
-        hide(2),
-        toggle(),
-        Op::Communicate(2),
-        Op::FocusWorkspaceUp,
-        Op::CompleteAnimations,
-    ]);
-    assert_snapshot!(workspaces(&layout), @"output1: *[2] []");
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[2] []");
     assert_snapshot!(floating_geometry(&layout, 2), @"pos: 100 50, size: 100 200");
 }
 

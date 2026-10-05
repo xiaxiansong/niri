@@ -693,14 +693,7 @@ impl<W: LayoutElement> Monitor<W> {
         // Floating tiles are added on top, so add them from bottom to top to keep the order.
         let ws = &mut self.workspaces[active_idx];
         for taken in tiles.into_iter().rev() {
-            let mut tile = taken.tile;
-
-            // Keep the window in place on the screen when the working area is different.
-            if taken.working_area != ws.working_area() {
-                tile.floating_pos = Some(ws.floating_logical_to_size_frac(taken.pos));
-            }
-
-            ws.add_scratchpad_tile(tile, taken.was_focused, false);
+            ws.add_scratchpad_tile(taken.tile, taken.was_focused, false);
         }
 
         self.ensure_empty_workspaces_after_add(active_idx);
