@@ -2805,6 +2805,15 @@ impl<W: LayoutElement> Layout<W> {
 
             monitor.verify_invariants();
 
+            for (ws_idx, workspace) in monitor.workspaces.iter().enumerate() {
+                if ws_idx != monitor.active_workspace_idx {
+                    assert!(
+                        !workspace.floating().tiles().any(|tile| tile.in_scratchpad),
+                        "shown scratchpad windows must be on the active workspace of their monitor"
+                    );
+                }
+            }
+
             for workspace in &monitor.workspaces {
                 let preferred =
                     workspace.find_preferred_output(monitors.iter().map(|monitor| &monitor.output));
