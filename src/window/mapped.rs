@@ -25,7 +25,7 @@ use super::{ResolvedWindowRules, WindowRef};
 use crate::handlers::KdeDecorationsModeState;
 use crate::layout::{
     ConfigureIntent, InteractiveResizeData, LayoutElement, LayoutElementRenderElement,
-    LayoutElementRenderSnapshot, SizingMode,
+    LayoutElementRenderSnapshot, ScratchpadState, SizingMode,
 };
 use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
@@ -96,6 +96,9 @@ pub struct Mapped {
 
     /// Whether this window is floating.
     is_floating: bool,
+
+    /// Scratchpad state of this window.
+    scratchpad_state: ScratchpadState,
 
     /// Whether this window is a target of a window cast.
     is_window_cast_target: bool,
@@ -289,6 +292,7 @@ impl Mapped {
             is_focused: false,
             is_active_in_column: true,
             is_floating: false,
+            scratchpad_state: ScratchpadState::None,
             is_window_cast_target: false,
             ignore_opacity_window_rule: false,
             block_out_buffer: RefCell::new(SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.])),
@@ -999,6 +1003,16 @@ impl LayoutElement for Mapped {
         let changed = self.is_floating != floating;
         self.is_floating = floating;
         self.need_to_recompute_rules |= changed;
+    }
+
+    fn set_scratchpad_state(&mut self, state: ScratchpadState) {
+        let changed = self.scratchpad_state != state;
+        self.scratchpad_state = state;
+        self.need_to_recompute_rules |= changed;
+    }
+
+    fn scratchpad_state(&self) -> ScratchpadState {
+        self.scratchpad_state
     }
 
     fn set_bounds(&self, bounds: Size<i32, Logical>) {

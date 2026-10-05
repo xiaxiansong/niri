@@ -31,7 +31,7 @@
 //! workspace just like any other. Then they come back, reconnect the second monitor, and now we
 //! don't want an unassuming workspace to end up on it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::rc::Rc;
 use std::time::Duration;
@@ -241,6 +241,8 @@ pub trait LayoutElement {
     fn set_activated(&mut self, active: bool);
     fn set_active_in_column(&mut self, active: bool);
     fn set_floating(&mut self, floating: bool);
+    fn set_scratchpad_state(&mut self, state: ScratchpadState);
+    fn scratchpad_state(&self) -> ScratchpadState;
     fn set_bounds(&self, bounds: Size<i32, Logical>);
     fn is_ignoring_opacity_window_rule(&self) -> bool;
 
@@ -360,6 +362,9 @@ pub struct Layout<W: LayoutElement> {
     interactive_move: Option<InteractiveMoveState<W>>,
     /// Ongoing drag-and-drop operation.
     dnd: Option<DndData<W>>,
+    /// Windows in the scratchpad.
+    #[allow(dead_code)] // Used in the following commits.
+    scratchpad: Scratchpad<W>,
     /// Clock for driving animations.
     clock: Clock,
     /// Time that we last updated render elements for.
@@ -391,6 +396,29 @@ enum MonitorSet<W: LayoutElement> {
         /// The workspaces.
         workspaces: Vec<Workspace<W>>,
     },
+}
+
+/// Scratchpad state of a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScratchpadState {
+    /// Not in the scratchpad.
+    #[default]
+    None,
+    /// In the scratchpad and hidden.
+    Hidden,
+    /// In the scratchpad and shown on some workspace.
+    Shown,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)] // Used in the following commits.
+struct Scratchpad<W: LayoutElement> {
+    /// Hidden tiles.
+    ///
+    /// FIFO: hiding pushes to the back; showing takes the first matching tile from the front.
+    hidden: VecDeque<Tile<W>>,
+    /// Sequence number for the next shown tile, used to find the most recently shown one.
+    next_seq: u64,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -718,6 +746,15 @@ impl RenderLayer {
     }
 }
 
+impl<W: LayoutElement> Scratchpad<W> {
+    fn new() -> Self {
+        Self {
+            hidden: VecDeque::new(),
+            next_seq: 0,
+        }
+    }
+}
+
 impl<W: LayoutElement> Layout<W> {
     pub fn new(clock: Clock, config: &Config) -> Self {
         Self::with_options_and_workspaces(clock, config, Options::from_config(config))
@@ -730,6 +767,7 @@ impl<W: LayoutElement> Layout<W> {
             last_active_workspace_id: HashMap::new(),
             interactive_move: None,
             dnd: None,
+            scratchpad: Scratchpad::new(),
             clock,
             update_render_elements_time: Duration::ZERO,
             overview_open: false,
@@ -755,6 +793,7 @@ impl<W: LayoutElement> Layout<W> {
             last_active_workspace_id: HashMap::new(),
             interactive_move: None,
             dnd: None,
+            scratchpad: Scratchpad::new(),
             clock,
             update_render_elements_time: Duration::ZERO,
             overview_open: false,
@@ -5058,6 +5097,15 @@ impl<W: LayoutElement> Default for MonitorSet<W> {
     fn default() -> Self {
         Self::NoOutputs { workspaces: vec![] }
     }
+}
+
+/// Sets the scratchpad state of the tile and its window.
+///
+/// This is the only place that should change either, to keep them in sync.
+#[allow(dead_code)] // Used in the following commits.
+fn set_tile_scratchpad<W: LayoutElement>(tile: &mut Tile<W>, state: ScratchpadState) {
+    tile.in_scratchpad = state != ScratchpadState::None;
+    tile.window_mut().set_scratchpad_state(state);
 }
 
 /// Cleans up the workspace at `idx` after removing a window from it, with no outputs.

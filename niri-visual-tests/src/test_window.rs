@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use niri::layout::{
     ConfigureIntent, InteractiveResizeData, LayoutElement, LayoutElementRenderElement,
-    LayoutElementRenderSnapshot, SizingMode,
+    LayoutElementRenderSnapshot, ScratchpadState, SizingMode,
 };
 use niri::render_helpers::offscreen::OffscreenData;
 use niri::render_helpers::renderer::NiriRenderer;
@@ -214,6 +214,12 @@ impl LayoutElement for TestWindow {
     fn set_active_in_column(&mut self, _active: bool) {}
 
     fn set_floating(&mut self, _floating: bool) {}
+
+    fn set_scratchpad_state(&mut self, _state: ScratchpadState) {}
+
+    fn scratchpad_state(&self) -> ScratchpadState {
+        ScratchpadState::None
+    }
 
     fn set_bounds(&self, _bounds: Size<i32, Logical>) {}
 

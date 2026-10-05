@@ -81,6 +81,14 @@ pub struct Tile<W: LayoutElement> {
     /// Currently selected preset height index when this tile is floating.
     pub(super) floating_preset_height_idx: Option<usize>,
 
+    /// Whether the tile is in the scratchpad (hidden or shown).
+    #[allow(dead_code)] // Used in the following commits.
+    pub(super) in_scratchpad: bool,
+
+    /// Sequence number of the last time this tile was shown from the scratchpad.
+    #[allow(dead_code)] // Used in the following commits.
+    pub(super) scratchpad_shown_seq: u64,
+
     /// The animation upon opening a window.
     open_animation: Option<OpenAnimation>,
 
@@ -204,6 +212,8 @@ impl<W: LayoutElement> Tile<W> {
             floating_pos: None,
             floating_preset_width_idx: None,
             floating_preset_height_idx: None,
+            in_scratchpad: false,
+            scratchpad_shown_seq: 0,
             open_animation: None,
             resize_animation: None,
             move_x_animation: None,
@@ -661,6 +671,14 @@ impl<W: LayoutElement> Tile<W> {
     pub fn stop_move_animations(&mut self) {
         self.move_x_animation = None;
         self.move_y_animation = None;
+    }
+
+    pub fn stop_all_animations(&mut self) {
+        self.open_animation = None;
+        self.resize_animation = None;
+        self.move_x_animation = None;
+        self.move_y_animation = None;
+        self.alpha_animation = None;
     }
 
     pub fn set_anim_y_between_workspaces(&mut self) {

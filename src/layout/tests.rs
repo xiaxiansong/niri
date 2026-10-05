@@ -36,6 +36,7 @@ struct TestWindowInner {
     max_size: Size<i32, Logical>,
     pending_sizing_mode: Cell<SizingMode>,
     pending_activated: Cell<bool>,
+    scratchpad_state: Cell<ScratchpadState>,
     sizing_mode: Cell<SizingMode>,
     is_windowed_fullscreen: Cell<bool>,
     is_pending_windowed_fullscreen: Cell<bool>,
@@ -88,6 +89,7 @@ impl TestWindow {
             max_size: params.min_max_size.1,
             pending_sizing_mode: Cell::new(SizingMode::Normal),
             pending_activated: Cell::new(false),
+            scratchpad_state: Cell::new(ScratchpadState::None),
             sizing_mode: Cell::new(SizingMode::Normal),
             is_windowed_fullscreen: Cell::new(false),
             is_pending_windowed_fullscreen: Cell::new(false),
@@ -231,6 +233,14 @@ impl LayoutElement for TestWindow {
     fn set_active_in_column(&mut self, _active: bool) {}
 
     fn set_floating(&mut self, _floating: bool) {}
+
+    fn set_scratchpad_state(&mut self, state: ScratchpadState) {
+        self.0.scratchpad_state.set(state);
+    }
+
+    fn scratchpad_state(&self) -> ScratchpadState {
+        self.0.scratchpad_state.get()
+    }
 
     fn sizing_mode(&self) -> SizingMode {
         self.0.sizing_mode.get()
