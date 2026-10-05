@@ -988,3 +988,62 @@ fn shown_window_follows_workspace_to_other_output() {
     assert_snapshot!(workspaces(&layout), @"output1: *[]; output2: [1] *[2] []");
     assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
 }
+
+#[test]
+fn activated_window_keeps_focus_when_shown_window_follows() {
+    let setup = [
+        Op::AddOutput(1),
+        window(1, 100),
+        Op::FocusWorkspaceDown,
+        window(3, 100),
+        Op::FocusWorkspaceUp,
+        floating_window(2),
+        hide(2),
+        toggle(),
+    ];
+
+    // A plain workspace switch keeps the focus on the shown window.
+    let mut ops = setup.to_vec();
+    ops.push(Op::FocusWorkspaceDown);
+    let layout = check_ops(ops);
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[3, 2] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
+
+    // Activating a window on another workspace.
+    let mut ops = setup.to_vec();
+    ops.push(Op::FocusWindow(3));
+    let layout = check_ops(ops);
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[3, 2] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(3)");
+
+    let mut layout = check_ops(setup.clone());
+    layout.activate_window_without_raising(&3);
+    layout.verify_invariants();
+    assert_snapshot!(workspaces(&layout), @"output1: [1] *[3, 2] []");
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(3)");
+
+    // Moving the last tiled window or column to another workspace, which leaves the shown window
+    // focused on the source workspace before it follows.
+    let setup = [
+        Op::AddOutput(1),
+        window(1, 100),
+        floating_window(2),
+        hide(2),
+        toggle(),
+        Op::FocusTiling,
+    ];
+    for op in [
+        Op::MoveWindowToWorkspaceDown(true),
+        Op::MoveColumnToWorkspaceDown(true),
+    ] {
+        let mut ops = setup.to_vec();
+        ops.push(op.clone());
+        let layout = check_ops(ops);
+        assert_eq!(workspaces(&layout), "output1: [] *[1, 2] []", "{op:?}");
+        assert_eq!(
+            summary(&layout),
+            "hidden: [], shown: [2], focus: Some(1)",
+            "{op:?}"
+        );
+    }
+}
