@@ -363,7 +363,6 @@ pub struct Layout<W: LayoutElement> {
     /// Ongoing drag-and-drop operation.
     dnd: Option<DndData<W>>,
     /// Windows in the scratchpad.
-    #[allow(dead_code)] // Used in the following commits.
     scratchpad: Scratchpad<W>,
     /// Clock for driving animations.
     clock: Clock,
@@ -411,13 +410,13 @@ pub enum ScratchpadState {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)] // Used in the following commits.
 struct Scratchpad<W: LayoutElement> {
     /// Hidden tiles.
     ///
     /// FIFO: hiding pushes to the back; showing takes the first matching tile from the front.
     hidden: VecDeque<Tile<W>>,
     /// Sequence number for the next shown tile, used to find the most recently shown one.
+    #[allow(dead_code)] // Used in the following commits.
     next_seq: u64,
 }
 
@@ -1255,6 +1254,24 @@ impl<W: LayoutElement> Layout<W> {
             }
         }
 
+        // Hidden scratchpad windows aren't on any workspace, so there's nothing to fill or clean
+        // up.
+        if let Some(idx) = self
+            .scratchpad
+            .hidden
+            .iter()
+            .position(|tile| tile.window().id() == window)
+        {
+            let tile = self.scratchpad.hidden.remove(idx).unwrap();
+            let width = ColumnWidth::Fixed(tile.tile_size().w);
+            return Some(RemovedTile {
+                tile,
+                width,
+                is_full_width: false,
+                is_floating: true,
+            });
+        }
+
         match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
                 for mon in monitors {
@@ -1313,6 +1330,23 @@ impl<W: LayoutElement> Layout<W> {
                 move_.tile.update_window();
                 return;
             }
+        }
+
+        if let Some(tile) = self
+            .scratchpad
+            .hidden
+            .iter_mut()
+            .find(|tile| tile.window().id() == window)
+        {
+            // Do this before calling update_window() so it can get up-to-date info.
+            if let Some(serial) = serial {
+                tile.window_mut().on_commit(serial);
+            }
+
+            tile.update_window();
+            // Hidden tiles aren't rendered, so they shouldn't animate.
+            tile.stop_all_animations();
+            return;
         }
 
         match &mut self.monitor_set {
@@ -2897,6 +2931,10 @@ impl<W: LayoutElement> Layout<W> {
             move_.tile.update_shaders();
         }
 
+        for tile in &mut self.scratchpad.hidden {
+            tile.update_shaders();
+        }
+
         match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
                 for mon in monitors {
@@ -3292,6 +3330,132 @@ impl<W: LayoutElement> Layout<W> {
             return;
         };
         workspace.set_window_floating(window, floating);
+    }
+
+    /// Moves a window to the scratchpad, hiding it.
+    ///
+    /// Returns the id of the window that was hidden, if any.
+    pub fn move_to_scratchpad(&mut self, window: Option<&W::Id>) -> Option<W::Id> {
+        let id = match window {
+            Some(id) => id.clone(),
+            None => self.focus()?.id().clone(),
+        };
+
+        match &self.interactive_move {
+            Some(InteractiveMoveState::Starting { window_id, .. }) if *window_id == id => {
+                return None;
+            }
+            Some(InteractiveMoveState::Moving(move_)) if *move_.tile.window().id() == id => {
+                return None;
+            }
+            _ => (),
+        }
+
+        if self.is_scratchpad_hidden(&id) {
+            return None;
+        }
+
+        // Hiding a window together with its dialogs would need tracking window groups, and
+        // hiding just the parent would leave its dialogs dangling.
+        if self.has_visible_child(&id) {
+            debug!("not moving window to scratchpad because it has visible children");
+            return None;
+        }
+
+        let ws = self.workspaces_mut().find(|ws| ws.has_window(&id))?;
+        let ws_id = ws.id();
+
+        // Unset fullscreen before removing the tile, like in interactive_move_update(). This
+        // will restore its size properly, and move it to floating if needed.
+        ws.set_fullscreen(&id, false);
+        ws.set_maximized(&id, false);
+
+        let RemovedTile {
+            mut tile,
+            is_floating,
+            ..
+        } = ws.remove_tile(&id, Transaction::new());
+
+        if !is_floating {
+            // The scratchpad shows windows as floating. Don't use the tiled size for this.
+            if tile.floating_window_size.is_none() {
+                let win = tile.window();
+                let rules = win.rules();
+                let width = match rules.default_width {
+                    Some(Some(width)) => width,
+                    _ => PresetSize::Proportion(0.6),
+                };
+                let height = match rules.default_height {
+                    Some(Some(height)) => height,
+                    _ => PresetSize::Proportion(0.6),
+                };
+                let size = ws.new_window_size(
+                    Some(width),
+                    Some(height),
+                    true,
+                    rules,
+                    (win.min_size(), win.max_size()),
+                );
+                tile.floating_window_size = Some(size);
+            }
+
+            ws.fill_view_after_removal();
+        }
+
+        tile.stop_all_animations();
+        tile.interactive_move_offset = Point::from((0., 0.));
+        let _ = tile.take_unmap_snapshot();
+        set_tile_scratchpad(&mut tile, ScratchpadState::Hidden);
+        // This takes effect with the configure sent from the next refresh().
+        tile.window_mut().set_activated(false);
+        tile.window_mut().set_floating(true);
+
+        self.scratchpad.hidden.push_back(tile);
+
+        match &mut self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => {
+                for mon in monitors {
+                    if let Some(idx) = mon.idx_of_ws(ws_id) {
+                        mon.clean_up_workspace_after_removal(idx);
+                        break;
+                    }
+                }
+            }
+            MonitorSet::NoOutputs { workspaces } => {
+                if let Some(idx) = workspaces.iter().position(|ws| ws.id() == ws_id) {
+                    clean_up_no_outputs_workspace_after_removal(workspaces, idx);
+                }
+            }
+        }
+
+        Some(id)
+    }
+
+    pub fn is_scratchpad_hidden(&self, window: &W::Id) -> bool {
+        self.scratchpad
+            .hidden
+            .iter()
+            .any(|tile| tile.window().id() == window)
+    }
+
+    /// Returns whether the window has any children outside the scratchpad hidden queue.
+    fn has_visible_child(&self, window: &W::Id) -> bool {
+        // Don't go through windows() so that this never considers hidden windows.
+        let windows = || {
+            let moving_window = self
+                .interactive_move
+                .as_ref()
+                .and_then(|x| x.moving())
+                .map(|move_| move_.tile.window());
+            let rest = self.workspaces().flat_map(|(_, _, ws)| ws.windows());
+            moving_window.into_iter().chain(rest)
+        };
+
+        let Some(parent) = windows().find(|win| win.id() == window) else {
+            return false;
+        };
+
+        windows().any(|win| win.id() != window && win.is_child_of(parent))
     }
 
     pub fn focus_floating(&mut self) {
@@ -4972,6 +5136,21 @@ impl<W: LayoutElement> Layout<W> {
             });
         }
 
+        for tile in &mut self.scratchpad.hidden {
+            let win = tile.window_mut();
+
+            win.set_active_in_column(true);
+            win.set_floating(true);
+            win.set_activated(false);
+
+            win.set_interactive_resize(None);
+
+            // Keep the last bounds since we don't know where the window will be shown.
+
+            win.send_pending_configure();
+            win.refresh();
+        }
+
         match &mut self.monitor_set {
             MonitorSet::Normal {
                 monitors,
@@ -5102,7 +5281,6 @@ impl<W: LayoutElement> Default for MonitorSet<W> {
 /// Sets the scratchpad state of the tile and its window.
 ///
 /// This is the only place that should change either, to keep them in sync.
-#[allow(dead_code)] // Used in the following commits.
 fn set_tile_scratchpad<W: LayoutElement>(tile: &mut Tile<W>, state: ScratchpadState) {
     tile.in_scratchpad = state != ScratchpadState::None;
     tile.window_mut().set_scratchpad_state(state);
