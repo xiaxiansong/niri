@@ -4,7 +4,12 @@ use std::sync::{Arc, Mutex};
 use client::ClientId;
 use insta::assert_snapshot;
 use niri_config::Action;
+use smithay::backend::renderer::element::{
+    Id, PrimaryScanoutOutput, RenderElementPresentationState, RenderElementState,
+    RenderElementStates,
+};
 use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel;
+use smithay::wayland::compositor::with_states;
 use tracing::field::Field;
 use tracing::subscriber::DefaultGuard;
 use tracing::{Level, Subscriber};
@@ -222,6 +227,79 @@ fn new_dialog_of_hidden_window_shows_it() {
     );
 
     assert_eq!(errors.errors(), Vec::<String>::new());
+}
+
+/// Updates the primary scanout output as if the window was rendered on output 1.
+fn render_window_on_output_1(f: &mut Fixture) {
+    let output = f.niri_output(1);
+    let niri = f.niri();
+    let surface = niri
+        .layout
+        .windows()
+        .next()
+        .unwrap()
+        .1
+        .toplevel()
+        .wl_surface();
+    let state = RenderElementState {
+        visible_area: 1,
+        presentation_state: RenderElementPresentationState::Rendering { reason: None },
+        needs_capture: false,
+    };
+    let states = RenderElementStates {
+        states: [(Id::from_wayland_resource(surface), state)].into(),
+    };
+    niri.update_primary_scanout_output(&output, &states);
+}
+
+fn primary_scanout_output(f: &mut Fixture) -> String {
+    let niri = f.niri();
+    let surface = niri
+        .layout
+        .windows()
+        .next()
+        .unwrap()
+        .1
+        .toplevel()
+        .wl_surface();
+    let output = with_states(surface, |states| {
+        let output = states.data_map.get::<Mutex<PrimaryScanoutOutput>>()?;
+        output.lock().unwrap().current_output()
+    });
+    format!("{:?}", output.map(|output| output.name()))
+}
+
+#[test]
+fn hiding_clears_primary_scanout_output() {
+    let (mut f, id) = set_up();
+    map_window(&mut f, id, "a", None);
+
+    render_window_on_output_1(&mut f);
+    assert_snapshot!(primary_scanout_output(&mut f), @r#"Some("headless-1")"#);
+
+    // Cleared right away, without waiting for a redraw.
+    f.niri_state()
+        .do_action(Action::MoveWindowToScratchpad, false);
+    assert_snapshot!(primary_scanout_output(&mut f), @"None");
+}
+
+#[test]
+fn redraw_clears_primary_scanout_output_of_hidden_window() {
+    let (mut f, id) = set_up();
+    map_window(&mut f, id, "a", None);
+
+    render_window_on_output_1(&mut f);
+    assert_snapshot!(primary_scanout_output(&mut f), @r#"Some("headless-1")"#);
+
+    // Hide through the layout directly to skip the hiding side effects.
+    f.niri().layout.move_to_scratchpad(None).unwrap();
+    assert_snapshot!(primary_scanout_output(&mut f), @r#"Some("headless-1")"#);
+
+    // Render output 1 without the window.
+    let output = f.niri_output(1);
+    f.niri()
+        .update_primary_scanout_output(&output, &RenderElementStates::default());
+    assert_snapshot!(primary_scanout_output(&mut f), @"None");
 }
 
 fn check_ipc(f: &mut Fixture) -> String {
