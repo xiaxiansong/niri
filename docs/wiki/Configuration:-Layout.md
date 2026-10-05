@@ -9,6 +9,7 @@ layout {
     gaps 16
     center-focused-column "never"
     always-center-single-column
+    fill-view-after-removal
     empty-workspace-above-first
     default-column-display "tabbed"
     background-color "#003300"
@@ -139,6 +140,24 @@ If set, niri will always center a single column on a workspace, regardless of th
 ```kdl
 layout {
     always-center-single-column
+}
+```
+
+### `fill-view-after-removal`
+
+<sup>Since: next release</sup>
+
+If set, when a tiled window or column leaves the scrolling layout (closed, moved to another workspace or monitor, or made floating), niri will scroll the view to remove any empty space that appeared past the first or the last column.
+
+This does not resize any windows to fill the screen.
+If the remaining columns are narrower than the screen, they are aligned to the left edge as usual, and the empty space stays on the right.
+
+The view is not moved while you're scrolling it with a gesture, interactively resizing a window, or when the focused column is fullscreen or maximized.
+This setting also has no effect when the focused column is centered (`center-focused-column "always"`, or `always-center-single-column` with a single column).
+
+```kdl
+layout {
+    fill-view-after-removal
 }
 ```
 
