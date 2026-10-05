@@ -808,7 +808,7 @@ fi
 | M1b | ✅ 2026-10-05 | `2fc8c299` F1-5、`1f38e79c` F1-6、`cabf5b38` 测试 | `cargo test --all` 249 / 0 失败（niri lib 226）；慢测试 134；`fill_view.rs` 共 21 个用例，新增触发点均做过反向验证 |
 | 功能一手动矩阵（§3.6） | ⏳ 待做 | — | 日常使用版本已打包（M1a + M1b） |
 | M2a | ✅ 2026-10-05 | `acc33e09` 清理辅助函数、`f6bb247f` `ensure_empty_workspaces_after_add`、`97c29645` 数据结构、`ef559bcf` 隐藏、`cf6206d7` 呈现与接口、`39bca733` 退出暂存区落点、`886a9374` 不变量、`70d20ac8` 测试 | `cargo test --all` 263 / 0 失败（niri lib 240）；慢测试 148；`scratchpad.rs` 共 14 个用例，关键实现点均做过反向验证 |
-| M2b | 未开始 | | |
+| M2b | ✅ 2026-10-05 | `69521a77` A 类、`4246ec5b` C/C'/C'' 类、`cda56e5b` 子窗口、`589b3c1d` proptest Op、`075ed4c9` 测试 | `cargo test --all` 267 / 0 失败（niri lib 244）；慢测试 152；`scratchpad.rs` 共 18 个用例；`random_operations_dont_panic` 10 轮 × 5000 cases，另有 256 + 3000 + 10000 cases 的单独运行，共约 6.3 万 cases，无 panic |
 
 M1b 补充说明：
 
@@ -827,6 +827,20 @@ M2a 补充说明：
 - 未被用例覆盖：规则 3 搬动时递增 seq。M2a 中可以观察到，但需要多显示器加多个选择器的组合，未单独写用例。
 - 规则 3 搬动窗口时没有开窗动画（文档未要求），窗口直接出现在当前工作区。是否加动画留到 M5 一并考虑。
 - M3 注意：`scratchpad_state()` 是 `LayoutElement` 的 trait 方法，niri 层（IPC）调用时需要 `use crate::layout::LayoutElement`。
+
+M2b 补充说明：
+
+- A 类：隐藏 Tile 排在拖动中窗口和各工作区之后。M2a 的测试辅助函数 `state()` 去掉了多余的 `.chain(scratchpad_hidden_windows())`；`generic_toggle_cycles_through_queue` 原本把 `windows()` 当作“已显示的窗口”，改为按 Shown 状态过滤（`windows()` 含义变化导致，期望值不变）。
+- 内部调用者的行为变化：`set_fullscreen()` 的 windowed fullscreen 分支和 `toggle_windowed_fullscreen()` 都经过 `with_windows_mut()`，A 类改动后会改到隐藏窗口，所以这两个方法的隐藏检查放在**函数最开头**（其余方法放在 interactive_move 检查之后）。`toggle_windowed_fullscreen()` 原本对隐藏 id 会在 `windows().find(..).unwrap()` 处 panic。
+- `verify_invariants()` 的 Starting 分支在 `has_window()` 之外加了“不是隐藏窗口”的断言（`has_window()` 现在包含隐藏窗口，原断言变弱；这也是不变量 5 的延伸）。
+- C 类中已自然满足、未加冗余检查（沿用 §4.5.4 的做法）：`scroll_amount_to_activate()`（遍历工作区，找不到返回 0）、`interactive_move_begin()`、`interactive_resize_begin()`、`interactive_resize_end()`。用例 17 逐个验证。
+- §4.5.7 表格未列出、带窗口 id 的方法：`interactive_move_update()`、`interactive_move_end()`（只在 Starting/Moving 状态 id 匹配时动作，而 Starting/Moving 不可能是隐藏窗口）、`interactive_resize_update()`（遍历工作区，返回 false）、`start_open_animation_for_window()`（遍历工作区，无操作）。均自然满足，未加代码；**待确认是否把它们补进表格**。
+- §4.6 第 3 条：`parent_changed` 经 `find_window_and_output_mut()` 找到隐藏父窗口后调用 `descendants_added()`，后者只遍历工作区，返回 false，无需代码。`bring_up_descendants_of()` 是有界循环，不受父链环影响。
+- 测试框架：`AddWindowNextTo`（查重与查找 next_to）、`AddWindowToNamedWorkspace`（查重）、`SetParent` 补了隐藏队列分支；`AddWindow`、`SetForcedSize` 经 `has_window()` / `windows()` 自然覆盖。此前 `AddWindow` 等可能添加与隐藏窗口重复的 id，只是暂存区 Op 未参与随机生成所以没暴露。exhaustive 的 `operations_dont_panic` 列表未加入暂存区 Op（文档未要求）。
+- 用例对照：15 `new_dialog_of_hidden_window_shows_it`（浮动/平铺对话框、`ActivateWindow::No`、无输出）；16 `hiding_with_visible_child_is_noop`（含规则 1 被拒返回 `Nothing`）；17 `operations_on_hidden_window_are_ignored`（隐藏窗口同时处于 windowed fullscreen，覆盖 `set_fullscreen(false)` 的特殊分支）。另加 `hidden_windows_are_found` 覆盖 A 类。`find_window_and_output(_mut)()` 无法用 `TestWindow` 测试（`is_wl_surface()` 恒为 false），留给 M3 的客户端集成测试。`SetParent` 作用于隐藏窗口只由随机测试覆盖。
+- 反向验证（逐个去掉后确认对应用例失败，再从 git 还原）：`windows()`、`with_windows()`、`with_windows_mut()` 中的隐藏 Tile；`toggle_window_height`、`move_to_output`、`popup_target_rect`、`set_fullscreen`、`toggle_windowed_fullscreen` 的检查；`add_window` 中呈现隐藏父窗口、无输出改为 Auto；测试框架 `AddWindowNextTo` 的隐藏查找。
+- 随机测试命中率（临时插桩，10000 cases）：成功隐藏约 200 次；各 C/C' 分支命中 1–8 次；NextTo 隐藏父窗口 4 次、无输出回退 1 次；`set_maximized`、`move_to_output` 的隐藏分支在该样本中未命中（用例 17 覆盖）。命中率低是因为 id 需要恰好对应已存在的窗口。未发现 panic。
+- M3 注意（niri 层因 A 类改动产生的行为变化，目前没有隐藏窗口所以不可观测）：`focus-window-previous` 按焦点时间戳从 `windows()` 中选取，会选中刚隐藏的窗口并经 `activate_window` 把它呈现出来；`set-dynamic-cast-window --id` 可以指向隐藏窗口；`screenshot-window --id` 需要 monitor，对隐藏窗口无操作；`close-window --id` 有效（符合 §4.2）。
 
 ---
 
