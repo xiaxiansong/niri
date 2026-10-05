@@ -642,15 +642,44 @@ impl<W: LayoutElement> Monitor<W> {
     /// Moves shown scratchpad windows from inactive workspaces to the active workspace.
     pub fn scratchpad_follow(&mut self) {
         let active_idx = self.active_workspace_idx;
+        let active_id = self.workspaces[active_idx].id();
+
+        // In the overview, the windows can be seen moving between workspaces, so animate that.
+        let animate = self.overview_progress.is_some() && self.workspace_switch.is_some();
 
         let mut tiles = Vec::new();
+        let mut moves = Vec::new();
         for (idx, ws) in self.workspaces.iter_mut().enumerate() {
             if idx != active_idx {
-                tiles.extend(ws.take_shown_scratchpad_tiles());
+                let taken = ws.take_shown_scratchpad_tiles();
+                if animate {
+                    for taken in &taken {
+                        moves.push((taken.tile.window().id().clone(), ws.id(), taken.pos));
+                    }
+                }
+                tiles.extend(taken);
             }
         }
 
         self.add_shown_scratchpad_tiles(tiles);
+
+        // Animate like Monitor::move_to_workspace(), following the workspace switch.
+        let config = self.options.animations.workspace_switch.0;
+        let ws_height_with_gap = self.workspace_size_with_gap(1.).h;
+        let new_idx = self.idx_of_ws(active_id).unwrap();
+        for (id, source_id, mut old_pos) in moves {
+            // There's a workspace switch, so the source workspace wasn't cleaned up.
+            let source_idx = self.idx_of_ws(source_id).unwrap();
+            old_pos.y += ws_height_with_gap * (source_idx as f64 - new_idx as f64);
+
+            let (tile, render_pos) = self.workspaces[new_idx]
+                .tiles_with_render_positions_mut(false)
+                .find(|(tile, _)| tile.window().id() == &id)
+                .unwrap();
+            let new_pos = render_pos - tile.render_offset();
+            tile.animate_move_from_with_config(old_pos - new_pos, config);
+            tile.set_anim_y_between_workspaces();
+        }
     }
 
     /// Adds shown scratchpad tiles taken from workspaces on this output to the active workspace.
