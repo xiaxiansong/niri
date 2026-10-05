@@ -466,3 +466,285 @@ fn shown_window_elsewhere_is_brought_over() {
     assert_snapshot!(location(&layout, 1), @"output1 ws 0/2");
     assert_snapshot!(summary(&layout), @"hidden: [], shown: [1], focus: Some(1)");
 }
+
+fn child(id: usize, parent: usize) -> TestWindowParams {
+    let mut params = TestWindowParams::new(id);
+    params.parent_id = Some(parent);
+    params.is_floating = true;
+    params
+}
+
+/// Everything that operations on windows could change.
+fn full_state(layout: &Layout<TestWindow>) -> String {
+    let mut lines = vec![summary(layout)];
+    layout.with_windows(|win, output, ws_id, win_layout| {
+        // Workspace ids differ between layouts, so use indices.
+        let ws_idx = ws_id.map(|id| {
+            layout
+                .workspaces()
+                .position(|(_, _, ws)| ws.id() == id)
+                .unwrap()
+        });
+        lines.push(format!(
+            "{} {:?} {ws_idx:?} {win_layout:?} {:?} {:?} {}",
+            win.0.id,
+            output.map(|output| output.name()),
+            win.pending_sizing_mode(),
+            win.requested_size(),
+            win.is_pending_windowed_fullscreen(),
+        ));
+    });
+    for tile in &layout.scratchpad.hidden {
+        lines.push(format!(
+            "{:?} {:?}",
+            tile.floating_window_size, tile.floating_pos
+        ));
+    }
+    for mon in layout.monitors() {
+        lines.push(format!(
+            "{} {}/{}",
+            mon.output_name(),
+            mon.active_workspace_idx,
+            mon.workspaces.len()
+        ));
+    }
+    lines.push(format!(
+        "{:?} {}",
+        layout.active_output().map(|output| output.name()),
+        layout.interactive_move.is_some()
+    ));
+    lines.join("\n")
+}
+
+#[test]
+fn hidden_windows_are_found() {
+    let mut layout = check_ops([Op::AddOutput(1), window(1, 100), window(2, 100), hide(1)]);
+    assert!(layout.has_window(&1));
+
+    let windows: Vec<_> = layout
+        .windows()
+        .map(|(mon, win)| format!("{} {}", win.0.id, mon.is_some()))
+        .collect();
+    assert_snapshot!(windows.join(", "), @"2 true, 1 false");
+
+    let mut found = Vec::new();
+    layout.with_windows(|win, output, ws_id, win_layout| {
+        if win.0.id == 1 {
+            found.push((output.is_some(), ws_id, win_layout));
+        }
+    });
+    let template = layout.scratchpad.hidden[0].ipc_layout_template();
+    assert_eq!(found, [(false, None, template)]);
+
+    let mut found = Vec::new();
+    layout.with_windows_mut(|win, output| found.push(format!("{} {}", win.0.id, output.is_some())));
+    assert_snapshot!(found.join(", "), @"2 true, 1 false");
+}
+
+#[test]
+fn new_dialog_of_hidden_window_shows_it() {
+    let setup = [Op::AddOutput(1), window(1, 100), window(2, 100), hide(1)];
+
+    // A floating dialog opens above its parent.
+    let mut ops = setup.to_vec();
+    ops.push(Op::AddWindowNextTo {
+        params: child(3, 1),
+        next_to_id: 1,
+    });
+    let layout = check_ops(ops);
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [1], focus: Some(3)");
+    let ws = layout.active_workspace().unwrap();
+    let floating: Vec<_> = ws
+        .floating()
+        .tiles()
+        .map(|tile| tile.window().0.id)
+        .collect();
+    assert_eq!(floating, [3, 1]);
+
+    // A tiled one opens in the scrolling layout.
+    let mut params = child(3, 1);
+    params.is_floating = false;
+    let mut ops = setup.to_vec();
+    ops.push(Op::AddWindowNextTo {
+        params,
+        next_to_id: 1,
+    });
+    let layout = check_ops(ops);
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [1], focus: Some(3)");
+    let ws = layout.active_workspace().unwrap();
+    assert!(ws.has_window(&3) && !ws.is_floating(&3));
+
+    // Neither takes focus if the dialog doesn't.
+    let mut layout = check_ops(setup);
+    layout.add_window(
+        TestWindow::new(child(3, 1)),
+        AddWindowTarget::NextTo(&1),
+        None,
+        None,
+        false,
+        true,
+        ActivateWindow::No,
+    );
+    layout.verify_invariants();
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [1], focus: Some(2)");
+
+    // Without outputs, the parent stays hidden.
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1, 100),
+        hide(1),
+        Op::RemoveOutput(1),
+        Op::AddWindowNextTo {
+            params: child(2, 1),
+            next_to_id: 1,
+        },
+    ]);
+    assert_snapshot!(summary(&layout), @"hidden: [1], shown: [], focus: None");
+    assert!(layout.workspaces().any(|(_, _, ws)| ws.has_window(&2)));
+
+    check_ops_on_layout(&mut layout, [Op::AddOutput(1)]);
+    assert_snapshot!(summary(&layout), @"hidden: [1], shown: [], focus: Some(2)");
+}
+
+#[test]
+fn hiding_with_visible_child_is_noop() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1, 100),
+        Op::AddWindow {
+            params: child(2, 1),
+        },
+    ]);
+    assert_eq!(layout.move_to_scratchpad(Some(&1)), None);
+    layout.verify_invariants();
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [], focus: Some(2)");
+
+    // Once the child is hidden, the parent can be hidden too.
+    check_ops_on_layout(&mut layout, [hide(2), hide(1)]);
+    assert_snapshot!(summary(&layout), @"hidden: [2, 1], shown: [], focus: None");
+
+    // Toggling a focused shown window with a visible child doesn't hide it either.
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1, 100),
+        hide(1),
+        toggle(),
+        Op::AddWindow {
+            params: child(2, 1),
+        },
+        Op::FocusWindow(1),
+    ]);
+    assert_eq!(
+        layout.toggle_scratchpad(|_| true),
+        ScratchpadToggle::Nothing
+    );
+    layout.verify_invariants();
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [1], focus: Some(1)");
+}
+
+#[test]
+fn operations_on_hidden_window_are_ignored() {
+    // The hidden window is also pending windowed fullscreen, which set_fullscreen() handles
+    // separately.
+    let setup = [
+        Op::AddOutput(1),
+        Op::AddOutput(2),
+        Op::FocusOutput(1),
+        window(1, 100),
+        window(2, 100),
+        Op::ToggleWindowedFullscreen(1),
+        hide(1),
+        Op::Communicate(1),
+        Op::Communicate(2),
+        Op::CompleteAnimations,
+    ];
+    let expected = full_state(&check_ops(setup.clone()));
+
+    let ops = [
+        Op::ConsumeOrExpelWindowLeft { id: Some(1) },
+        Op::ConsumeOrExpelWindowRight { id: Some(1) },
+        Op::CenterWindow { id: Some(1) },
+        Op::SwitchPresetWindowWidth { id: Some(1) },
+        Op::SwitchPresetWindowWidthBack { id: Some(1) },
+        Op::SwitchPresetWindowHeight { id: Some(1) },
+        Op::SwitchPresetWindowHeightBack { id: Some(1) },
+        Op::SetWindowWidth {
+            id: Some(1),
+            change: SizeChange::SetFixed(300),
+        },
+        Op::SetWindowHeight {
+            id: Some(1),
+            change: SizeChange::SetFixed(300),
+        },
+        Op::ResetWindowHeight { id: Some(1) },
+        Op::ToggleWindowFloating { id: Some(1) },
+        Op::SetWindowFloating {
+            id: Some(1),
+            floating: false,
+        },
+        Op::SetWindowFloating {
+            id: Some(1),
+            floating: true,
+        },
+        Op::MoveFloatingWindow {
+            id: Some(1),
+            x: PositionChange::SetFixed(10.),
+            y: PositionChange::SetFixed(10.),
+            animate: false,
+        },
+        Op::InteractiveMoveBegin {
+            window: 1,
+            output_idx: 1,
+            px: 0.,
+            py: 0.,
+        },
+        Op::InteractiveResizeBegin {
+            window: 1,
+            edges: ResizeEdge::RIGHT,
+        },
+        Op::InteractiveResizeUpdate {
+            window: 1,
+            dx: 100.,
+            dy: 100.,
+        },
+        Op::InteractiveResizeEnd { window: 1 },
+        Op::FullscreenWindow(1),
+        Op::SetFullscreenWindow {
+            window: 1,
+            is_fullscreen: true,
+        },
+        Op::SetFullscreenWindow {
+            window: 1,
+            is_fullscreen: false,
+        },
+        Op::ToggleWindowedFullscreen(1),
+        Op::MaximizeWindowToEdges { id: Some(1) },
+        Op::MoveWindowToWorkspace {
+            window_id: Some(1),
+            workspace_idx: 1,
+        },
+        Op::MoveWindowToOutput {
+            window_id: Some(1),
+            output_id: 2,
+            target_ws_idx: None,
+        },
+    ];
+    for op in ops {
+        let mut all = setup.to_vec();
+        all.push(op.clone());
+        let layout = check_ops(all);
+        assert_eq!(full_state(&layout), expected, "{op:?}");
+    }
+
+    // Methods without a corresponding op.
+    let mut layout = check_ops(setup);
+    assert_eq!(layout.popup_target_rect(&1), Rectangle::default());
+    assert_eq!(layout.scroll_amount_to_activate(&1), 0.);
+    assert!(!layout.should_trigger_focus_follows_mouse_on(&1));
+    let output = layout.outputs().next().unwrap().clone();
+    assert!(!layout.interactive_move_begin(1, &output, Point::from((0., 0.))));
+    assert!(!layout.interactive_resize_begin(1, ResizeEdge::RIGHT));
+    layout.set_maximized(&1, true);
+    layout.verify_invariants();
+    assert_eq!(full_state(&layout), expected);
+}
