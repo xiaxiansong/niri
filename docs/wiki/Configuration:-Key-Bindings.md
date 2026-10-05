@@ -407,14 +407,17 @@ A shown window that was focused stays focused; otherwise the focus on the new wo
 - A workspace with only shown scratchpad windows counts as a regular non-empty workspace.
 So, switching to the empty workspace at the bottom while a window is shown makes it non-empty, and niri adds a new empty workspace below it (or above it with `empty-workspace-above-first`, when switching to the first workspace).
 A workspace that the shown windows leave empty is removed as usual.
-- When a workspace moves to another monitor (for example, its monitor is disconnected), its shown windows move with it and then to the active workspace of that monitor.
+- Shown windows stay in place on the screen while the workspaces slide during a switch (including gestures), drawn on top of the other windows.
+If the new workspace has a focused fullscreen window, an unfocused shown window is hidden behind it, like other floating windows there.
+- In the overview, shown windows slide along with the workspace switch into the new workspace.
+- Shown windows belong to their monitor rather than to a workspace.
+When a workspace moves to another monitor (`move-workspace-to-monitor`, or going back to its original monitor when that monitor is connected), its shown windows stay on their monitor, on its new active workspace.
+Only when their monitor is disconnected do they move with the workspace to another monitor.
 - Windows don't follow across monitors: focusing another monitor leaves the shown windows where they are.
 
 Current limitations:
 
 - Dialogs and other child windows of a shown window don't follow it, they stay on the original workspace.
-- During a workspace switch gesture, shown windows stay on the old workspace and slide away with it, then move to the new workspace when you lift your fingers.
-- In the overview, shown windows jump to the workspace you switch to.
 
 Activating a hidden window shows it: for example, clicking it in a taskbar, `focus-window --id`, or an application asking for focus (subject to the `on-xdg-activate` setting).
 When a hidden window opens a dialog, the window is shown first, and the dialog opens next to it.
