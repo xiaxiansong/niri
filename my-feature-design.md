@@ -830,6 +830,7 @@ fi
 | 功能一手动矩阵（§3.6） | ⏳ 待做 | — | 日常使用版本已打包（M1a + M1b） |
 | M2a | ✅ 2026-10-05 | `acc33e09` 清理辅助函数、`f6bb247f` `ensure_empty_workspaces_after_add`、`97c29645` 数据结构、`ef559bcf` 隐藏、`cf6206d7` 呈现与接口、`39bca733` 退出暂存区落点、`886a9374` 不变量、`70d20ac8` 测试 | `cargo test --all` 263 / 0 失败（niri lib 240）；慢测试 148；`scratchpad.rs` 共 14 个用例，关键实现点均做过反向验证 |
 | M2b | ✅ 2026-10-05 | `69521a77` A 类、`4246ec5b` C/C'/C'' 类、`cda56e5b` 子窗口、`589b3c1d` proptest Op、`075ed4c9` 测试 | `cargo test --all` 267 / 0 失败（niri lib 244）；慢测试 152；`scratchpad.rs` 共 18 个用例；`random_operations_dont_panic` 10 轮 × 5000 cases，另有 256 + 3000 + 10000 cases 的单独运行，共约 6.3 万 cases，无 panic |
+| M3 | ✅ 2026-10-05 | `34ac9026` IPC 窗口字段、`9f2bbf3d` 可见性兜底、`e3ee7cf4` 动作与副作用入口、`c6225784` D14/D15/D16、`e51627b6` wiki、`3dc06bbe` `142cefb7` 客户端测试；文档 `cc5cdd32` `9388edb2` `68c0d3c8` | `cargo test --all` 275 / 0 失败（niri lib 252）；慢测试 152；`src/tests/scratchpad.rs` 共 8 个用例；日常使用版本已打包（M1 + M2 + M3，28 个补丁）：`niri-git 26.04.r193.gf15e90b-1`（旧包 r173 移到打包目录的 `old/`） |
 
 M1b 补充说明：
 
@@ -862,6 +863,22 @@ M2b 补充说明：
 - 反向验证（逐个去掉后确认对应用例失败，再从 git 还原）：`windows()`、`with_windows()`、`with_windows_mut()` 中的隐藏 Tile；`toggle_window_height`、`move_to_output`、`popup_target_rect`、`set_fullscreen`、`toggle_windowed_fullscreen` 的检查；`add_window` 中呈现隐藏父窗口、无输出改为 Auto；测试框架 `AddWindowNextTo` 的隐藏查找。
 - 随机测试命中率（临时插桩，10000 cases）：成功隐藏约 200 次；各 C/C' 分支命中 1–8 次；NextTo 隐藏父窗口 4 次、无输出回退 1 次；`set_maximized`、`move_to_output` 的隐藏分支在该样本中未命中（用例 17 覆盖）。命中率低是因为 id 需要恰好对应已存在的窗口。未发现 panic。
 - M3 注意（niri 层因 A 类改动产生的行为变化，目前没有隐藏窗口所以不可观测）：`focus-window-previous` 按焦点时间戳从 `windows()` 中选取，会选中刚隐藏的窗口并经 `activate_window` 把它呈现出来；`set-dynamic-cast-window --id` 可以指向隐藏窗口；`screenshot-window --id` 需要 monitor，对隐藏窗口无操作；`close-window --id` 有效（符合 §4.2）。用户已确认：前两者在 niri 层排除隐藏窗口（D14、D15，§4.8.1），M3 实现。另发现 portal 窗口选择列表也会列出隐藏窗口，记为 §4.8.1 待定项。
+
+M3 补充说明：
+
+- 提交拆分（经用户同意调整）：niri-ipc 的 `Action` 一加变体，niri-config 的 `From<niri_ipc::Action>` 与 `do_action()` 的穷举 match 就要求同时实现，无法按原计划拆成各自能编译的提交。实际为：C1 IPC 窗口字段（含 `changed` 判断、`niri msg windows` 文本行 “Scratchpad: no/shown/hidden”）→ C2 `update_primary_scanout_output()` 兜底 → C3 动作（ipc + config + `validate_action` + `do_action` + 副作用入口）→ C4 D14/D15/D16。
+- 新决定与修订（均先改文档再写代码）：D16 portal 列表排除隐藏窗口；§4.8 副作用顺序改为“清缓存先于关闭弹出菜单”（smithay `dismiss_popup()` 会立即把弹出层移出 PopupTree，`with_surfaces` 之后就找不到它）；§5.3 补充光标处理（照 `State::focus_window()`）；§4.12 IPC 用例改为“事件流状态 vs 按 layout 重算”。
+- niri 层新增：`State::toggle_scratchpad(filter)`（两个 `scratchpad-show` 分支共用：执行、按结果调副作用或移光标、重绘）、`State::move_cursor_after_scratchpad_focus()`、`State::on_window_hidden_to_scratchpad()`，都在 `niri.rs` 的 `focus_window()` 旁边。D16 的过滤在 `#[cfg(feature = "dbus")]` 函数内，`ScratchpadState` 在函数内导入（照 `with_toplevel_role` 的写法），避免关闭 dbus 时出现未使用的导入。niri 主包不直接依赖 regex，`validate_action` 用 `niri_config::utils::RegexEq::from_str` 校验。
+- 未改：hotkey overlay（不在设计范围；不设 `hotkey-overlay-title` 时这些动作不出现在 overlay 中）。
+- 客户端测试（`src/tests/scratchpad.rs`）：`hidden_window_keeps_committing`（用只在当前线程生效的 tracing Layer 收集 ERROR 日志，断言没有 “pre-commit hook …” 错误；同时补上 M2b 无法用 `TestWindow` 测的 `find_window_and_output_mut()`）、`unmap_hidden_window`（含 D11 再映射为普通窗口）、`new_dialog_of_hidden_window_shows_it`、`ipc_window_state_follows_scratchpad`（`#[cfg(test)] State::ipc_windows_from_events_and_layout()`，JSON 整体比较）、`focus_window_previous_skips_hidden_windows`（D14）、`screencast_window_list_skips_hidden_windows`（D16）、`hiding_clears_primary_scanout_output`、`redraw_clears_primary_scanout_output_of_hidden_window`。headless 后端不渲染、从不写可见性缓存，后两个用例用真实的 `update_primary_scanout_output()` 传入“已呈现”的状态来预置缓存。
+- 期望值均先手算。唯一不符的一处是测试本身的问题：xdg-shell 规定取消映射会丢弃 toplevel 的全部属性（含 title），客户端再映射前要重新设置；测试补上 `set_title`，期望值不变。
+- 未被用例覆盖：D15（动态录屏目标只写进进行中的录屏，需要 PipeWire）、副作用中的停止录屏、关闭弹出菜单（测试客户端不支持 xdg_popup）、MRU 删缩略图、光标处理。
+- 反向验证（逐个去掉后确认对应用例失败，再从 git 还原）：`changed` 中的两个新字段、`make_ipc_window` 的 `is_scratchpad_hidden`、副作用入口的清缓存、C2 的 `chain`、D14、D16、`find_window_and_output_mut()` 与 `find_window_and_output()` 的隐藏分支（前者失败时收集到的正是 “pre-commit hook for mapped surfaces must be removed upon unmapping”）。
+- wiki（`Configuration:-Key-Bindings.md`、`IPC.md`）用英文，与功能一的 wiki 一致，提交信息 `wiki: …`。KDL 示例经 `wiki-parses` 测试解析。
+- 发现：§5.1 / wiki 示例的 `Mod+Minus`、`Mod+Shift+Minus` 与默认配置的 `set-column-width` / `set-window-height` 冲突，照抄进默认配置会报重复绑定（wiki 示例单独解析不受影响）。
+- 发现：`Niri::mru_apply_keyboard_commit()` 只遍历工作区。窗口在焦点防抖期间被隐藏时，待提交的焦点时间戳会被丢弃；无害，未改。
+- 嵌套冒烟测试（ghostty，经嵌套 niri 的 IPC 驱动）：隐藏平铺/浮动窗口、`--app-id` 选择器呈现与再隐藏、通用键 A→B→A 轮换、平铺窗口首次呈现为工作区 60%、D13 与无效正则的错误信息、`remove-window-from-scratchpad`（Shown 与按 id 的 Hidden）、`focus-window --id` 呈现隐藏窗口、`focus-window-previous` 不选隐藏窗口、`close-window --id` 关闭隐藏窗口、事件流中 Shown→None 的事件、截图确认 dropdown 位置。日志无 ERROR、无 panic。未做（需人工）：弹出菜单、真实程序的对话框、MRU 打开时隐藏、视频播放器息屏、DMS 任务栏、多显示器。
+- 风险（未验证）：libadwaita 等在窗口内部绘制的对话框不是子 toplevel，D10 无法据此呈现父窗口；程序在隐藏窗口里弹出这类确认框时，窗口会保持隐藏。手动测试时留意。
 
 ---
 
