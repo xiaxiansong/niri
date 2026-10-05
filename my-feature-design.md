@@ -257,9 +257,10 @@ fn remove_window_impl(&mut self, window: &W::Id, transaction: Transaction, fill_
 
 - 为什么不放在 `dnd_scroll_gesture_end()`：`interactive_move_end()` 先结束所有工作区的 DnD 手势（约 4167–4174 行），之后才把窗口放回。如果在手势结束时夹紧，拖回同一工作区会先夹紧、再插入，视图滑两次。
 - 做法：
-  1. `InteractiveMoveData` 新增 `source_workspace: Option<WorkspaceId>` 和 `source_was_tiled: bool`。在 `interactive_move_update()` 的 Starting→Moving 分支里，在 `remove_window_impl` 之前记录（找到含该窗口的工作区 id；`source_was_tiled = !is_floating`）。
+  1. `InteractiveMoveData` 新增 `source_workspace: Option<WorkspaceId>` 和 `source_was_tiled: bool`。在 `interactive_move_update()` 的 Starting→Moving 分支里，在 `remove_window_impl` 之前记录（找到含该窗口的工作区 id；`source_was_tiled = !is_floating`）。**注意**：`is_floating` 必须取该分支开头、`set_fullscreen(false)/set_maximized(false)` **之前**的值——原本浮动的全屏窗口在取消全屏时会被立即移回浮动层，此时 `RemovedTile::is_floating` 为 true，但平铺层确实少了一列（测试 `interactive_move_of_floating_window` 第二个场景）。
   2. `interactive_move_end()` 的 Moving 路径在窗口放置**之后**、函数返回前：若 `source_was_tiled`，按 id 找到源工作区（可能已被清理，找不到就跳过），调用 `ws.fill_view_after_removal()`。拖回同一工作区时，此时长带已完整，调用是无害的。
-  3. `remove_window_impl` 中“拖动中窗口被关闭”的分支（约 1167 行）：在 `dnd_scroll_gesture_end()` 之后，同样对源工作区调用一次。
+  3. `remove_window_impl` 中“拖动中窗口被关闭”的分支（约 1167 行）：在 `dnd_scroll_gesture_end()` 之后，同样对源工作区调用一次（条件为 `fill_view && source_was_tiled`；该分支实际调用时 `fill_view` 总为 true，加上只为与参数语义一致）。
+  4. 已知限制：拖动期间所有工作区的视图都被 DnD 手势锁住，松手后只补夹紧**源工作区**。拖动期间其他工作区发生的移除（如某窗口自行关闭）留下的空白不会被消除（见 §8）。
 
 **F1-6 合并进列**
 
@@ -780,8 +781,8 @@ fi
 | 里程碑 | 内容 | 验收 |
 |---|---|---|
 | M0 | 基线：`cargo build`、`cargo test` 全绿（已完成编译缓存） | 记录基线测试数 |
-| M1a | F1-1 配置 → F1-2 纯重构（单独提交，快照零变化）→ F1-3 → F1-4 → §3.6 用例 1–16（用例 10 仅拖动中部分：拖动中源工作区视图不变；落点后夹紧依赖 F1-5，归 M1b）、18 | 换成日常使用版本 |
-| M1b | F1-5 拖走、F1-6 合并 + 用例 10、17 | |
+| M1a ✅ | F1-1 配置 → F1-2 纯重构（单独提交，快照零变化）→ F1-3 → F1-4 → §3.6 用例 1–16（用例 10 仅拖动中部分：拖动中源工作区视图不变；落点后夹紧依赖 F1-5，归 M1b）、18 | 换成日常使用版本 |
+| M1b ✅ | F1-5 拖走、F1-6 合并 + 用例 10、17 | 与 M1a 一起换成日常使用版本 |
 | M2 | 暂存区 Layout 核心：§4.5 全部（含审计）、§4.6、不变量 1–3、5–7、proptest Op、确定性用例（除跟随相关） | `random_operations_dont_panic` 多轮无 panic。此时显示中的窗口不跟随，停留在呈现时的工作区；**为保证不变量 4 不被违反，M2 暂不启用不变量 4** |
 | M3 | niri 集成：config 动作、IPC 动作/字段/变化检测/校验、`do_action`、§4.8 副作用与可见性、文档、客户端集成测试 | 可日常使用 |
 | M4 | 跟随：§4.7 全部调用点 + 不变量 4 + 用例 8–11、14 | |
@@ -791,6 +792,23 @@ fi
 工作量估算（含测试，业余时间）：M1 约 2–4 天；M2 约 5–8 天；M3 约 3–4 天；M4 约 2–3 天。原设计“150–250 行 / 3–4 周”只对功能一大致成立。
 
 日常使用：用 AUR `niri-git` 的 PKGBUILD 打包，补丁放进 `prepare()` 中 `git am`；保留官方包在 `/var/cache/pacman/pkg/` 以便 `pacman -U` 回滚。嵌套测试：`cargo run -- -c /path/to/test-config.kdl`，内层用 Alt 作 Mod 键，避免与外层冲突。
+
+### 6.1 进度
+
+| 里程碑 | 状态 | 提交 | 测试 |
+|---|---|---|---|
+| M0 | ✅ 2026-10-05（工具链换成 rustup，rustc 1.99.0） | — | `cargo test --all` 245 / 0 失败（niri lib 222）；`RUN_SLOW_TESTS=1 cargo test --lib layout::` 130 |
+| M1a | ✅ 2026-10-05 | `87949e15` 配置、`a541a30f` 提取吸附端点、`e303873d` 夹紧函数、`9833ba51` 调用点、`18fca982` 测试 | — |
+| M1b | ✅ 2026-10-05 | `2fc8c299` F1-5、`1f38e79c` F1-6、`cabf5b38` 测试 | `cargo test --all` 249 / 0 失败（niri lib 226）；慢测试 134；`fill_view.rs` 共 21 个用例，新增触发点均做过反向验证 |
+| 功能一手动矩阵（§3.6） | ⏳ 待做 | — | 日常使用版本已打包（M1a + M1b） |
+| M2 | 未开始 | | |
+
+M1b 补充说明：
+
+- 用例 10 的“落到别的工作区”用另一块显示器实现；Overview 中跨工作区放置走同一段按 id 查找源工作区的代码，未单独写用例。
+- “拖回同一工作区只滑一次”：放置与夹紧在同一次调用内完成，单元测试中时间不推进，两段式本身不可观测；用例断言的是松手后动画终点即最终值、放回原位时视图完全不动。最终以手动测试为准。
+- `source_workspace` 按本文用 `Option<WorkspaceId>`，实际总为 `Some`，可简化为 `WorkspaceId`（未改，待定）。
+- 收尾 grep（§3.4）结果：所有移除路径均已触发或属于表格中的“否”；`swap_window_in_direction` 不改变列数，无需触发。
 
 ---
 
@@ -823,5 +841,7 @@ fi
 **窗口规则**：`Match.is_in_scratchpad: Option<bool>`、`WindowRule.open_in_scratchpad: Option<bool>`。`open-in-scratchpad` 在首次映射后执行隐藏（不能在无尺寸时入队）。`is-in-scratchpad` 规则的重算不能反过来触发状态转换（防止进出循环）。
 
 **再映射保留身份**：在 `Unmapped` 上记录 `was_in_scratchpad`；再映射时作为 Shown 呈现在当前工作区（不能直接隐藏，否则托盘“显示窗口”会没有反应）。
+
+**拖动期间其他工作区的移除（M1b 发现）**：拖动中所有工作区的视图被 DnD 手势锁住，`fill_view_after_removal()` 会跳过；松手后只补夹紧源工作区。若需要，可在 `interactive_move_end()` 中对拖动期间发生过平铺移除的工作区（记录 id 集合）统一补一次夹紧。
 
 **异步尺寸校正（R7）**：如有需要，加一次性的“移除后待校正”标记。下一次活动列提交尺寸后执行一次夹紧；任何手势、交互式 resize 或聚焦操作都会取消该标记。
