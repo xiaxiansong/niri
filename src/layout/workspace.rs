@@ -823,6 +823,39 @@ impl<W: LayoutElement> Workspace<W> {
         true
     }
 
+    /// Takes all shown scratchpad tiles out of the floating layout, from top to bottom.
+    ///
+    /// Returns each tile along with whether it was the focused window of this workspace.
+    ///
+    /// Unlike [`Workspace::remove_tile()`], this doesn't make the windows leave the output, since
+    /// they are expected to move to another workspace on the same output.
+    pub fn take_shown_scratchpad_tiles(&mut self) -> Vec<(Tile<W>, bool)> {
+        let ids: Vec<_> = self
+            .floating
+            .tiles()
+            .filter(|tile| tile.in_scratchpad)
+            .map(|tile| tile.window().id().clone())
+            .collect();
+        if ids.is_empty() {
+            return Vec::new();
+        }
+
+        let focused = self.active_window().map(|win| win.id().clone());
+
+        let tiles = ids
+            .into_iter()
+            .map(|id| {
+                let was_focused = focused.as_ref() == Some(&id);
+                let removed = self.floating.remove_tile(&id);
+                (removed.tile, was_focused)
+            })
+            .collect();
+
+        self.update_focus_floating_tiling_after_removing(true);
+
+        tiles
+    }
+
     fn update_focus_floating_tiling_after_removing(&mut self, removed_from_floating: bool) {
         if removed_from_floating {
             if self.floating.is_empty() {

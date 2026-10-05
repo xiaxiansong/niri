@@ -627,6 +627,34 @@ impl<W: LayoutElement> Monitor<W> {
         idx
     }
 
+    /// Moves shown scratchpad windows from inactive workspaces to the active workspace.
+    pub fn scratchpad_follow(&mut self) {
+        let active_idx = self.active_workspace_idx;
+
+        let mut tiles = Vec::new();
+        for (idx, ws) in self.workspaces.iter_mut().enumerate() {
+            if idx != active_idx {
+                tiles.extend(ws.take_shown_scratchpad_tiles());
+            }
+        }
+        if tiles.is_empty() {
+            return;
+        }
+
+        // Floating tiles are added on top, so add them from bottom to top to keep the order.
+        let ws = &mut self.workspaces[active_idx];
+        for (tile, was_focused) in tiles.into_iter().rev() {
+            ws.add_scratchpad_tile(tile, was_focused, false);
+        }
+
+        self.ensure_empty_workspaces_after_add(active_idx);
+
+        // Without a workspace switch, nothing else will clean up the workspaces we emptied.
+        if self.workspace_switch.is_none() {
+            self.clean_up_workspaces();
+        }
+    }
+
     pub fn add_tile_to_column(
         &mut self,
         workspace_idx: usize,
