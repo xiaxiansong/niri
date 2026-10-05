@@ -3200,6 +3200,127 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         true
     }
 
+    /// Computes the left and right snapping points (view positions) for a column.
+    fn column_snap_points(
+        &self,
+        col_x: f64,
+        col: &Column<W>,
+        prev_col_w: Option<f64>,
+        next_col_w: Option<f64>,
+    ) -> (f64, f64) {
+        let center_on_overflow = matches!(
+            self.options.layout.center_focused_column,
+            CenterFocusedColumn::OnOverflow
+        );
+
+        let view_width = self.view_size.w;
+        let gaps = self.options.layout.gaps;
+
+        let col_w = col.width();
+        let mode = col.sizing_mode();
+
+        let area = if mode.is_maximized() {
+            self.parent_area
+        } else {
+            self.working_area
+        };
+
+        let left_strut = area.loc.x;
+        let right_strut = self.view_size.w - area.size.w - area.loc.x;
+
+        // Normal columns align with the working area, but fullscreen columns align with the view
+        // size.
+        if mode.is_fullscreen() {
+            let left = col_x;
+            let right = left + col_w;
+            (left, right)
+        } else {
+            // Logic from compute_new_view_offset.
+            let padding = if mode.is_maximized() {
+                0.
+            } else {
+                ((area.size.w - col_w) / 2.).clamp(0., gaps)
+            };
+
+            let center = if area.size.w <= col_w {
+                col_x - left_strut
+            } else {
+                col_x - (area.size.w - col_w) / 2. - left_strut
+            };
+            let is_overflowing = |adj_col_w: Option<f64>| {
+                center_on_overflow
+                    && adj_col_w
+                        .filter(|adj_col_w| {
+                            // NOTE: This logic won't work entirely correctly with small fixed-size
+                            // maximized windows (they have a different area and padding).
+                            center_on_overflow && adj_col_w + 3.0 * gaps + col_w > area.size.w
+                        })
+                        .is_some()
+            };
+
+            let left = if is_overflowing(next_col_w) {
+                center
+            } else {
+                col_x - padding - left_strut
+            };
+            let right = if is_overflowing(prev_col_w) {
+                center + view_width
+            } else {
+                col_x + col_w + padding + right_strut
+            };
+            (left, right)
+        }
+    }
+
+    /// Computes the first column's left snap and the last column's right snap (view positions).
+    ///
+    /// Returns `None` when centering the focused column or when there are no columns.
+    fn edge_snaps(&self) -> Option<(f64, f64)> {
+        if self.columns.is_empty() || self.is_centering_focused_column() {
+            return None;
+        }
+
+        let view_width = self.view_size.w;
+        let gaps = self.options.layout.gaps;
+
+        // It's ok if leftmost_snap is > rightmost_snap (this happens if the columns on a
+        // workspace total up to less than the workspace width).
+
+        // The first column's left snap isn't actually guaranteed to be the *leftmost* snap.
+        // With weird enough left strut and perhaps a maximized small fixed-size window, you
+        // can make the second window's left snap be further to the left than the first
+        // window's. The same goes for the rightmost snap.
+        //
+        // This isn't actually a big problem because it's very much an obscure edge case. Just
+        // need to make sure the code doesn't panic when that happens.
+        let leftmost_snap = self
+            .column_snap_points(
+                0.,
+                &self.columns[0],
+                None,
+                self.columns.get(1).map(|c| c.width()),
+            )
+            .0;
+        let last_col_idx = self.columns.len() - 1;
+        let last_col_x = self
+            .columns
+            .iter()
+            .take(last_col_idx)
+            .fold(0., |col_x, col| col_x + col.width() + gaps);
+        let rightmost_snap =
+            self.column_snap_points(
+                last_col_x,
+                &self.columns[last_col_idx],
+                last_col_idx
+                    .checked_sub(1)
+                    .and_then(|idx| self.columns.get(idx).map(|c| c.width())),
+                None,
+            )
+            .1 - view_width;
+
+        Some((leftmost_snap, rightmost_snap))
+    }
+
     pub fn view_offset_gesture_end(&mut self, is_touchpad: Option<bool>) -> bool {
         let ViewOffset::Gesture(gesture) = &mut self.view_offset else {
             return false;
@@ -3273,109 +3394,13 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 col_x += col_w + self.options.layout.gaps;
             }
         } else {
-            let center_on_overflow = matches!(
-                self.options.layout.center_focused_column,
-                CenterFocusedColumn::OnOverflow
-            );
-
             let view_width = self.view_size.w;
             let gaps = self.options.layout.gaps;
 
-            let snap_points =
-                |col_x, col: &Column<W>, prev_col_w: Option<f64>, next_col_w: Option<f64>| {
-                    let col_w = col.width();
-                    let mode = col.sizing_mode();
-
-                    let area = if mode.is_maximized() {
-                        self.parent_area
-                    } else {
-                        self.working_area
-                    };
-
-                    let left_strut = area.loc.x;
-                    let right_strut = self.view_size.w - area.size.w - area.loc.x;
-
-                    // Normal columns align with the working area, but fullscreen columns align with
-                    // the view size.
-                    if mode.is_fullscreen() {
-                        let left = col_x;
-                        let right = left + col_w;
-                        (left, right)
-                    } else {
-                        // Logic from compute_new_view_offset.
-                        let padding = if mode.is_maximized() {
-                            0.
-                        } else {
-                            ((area.size.w - col_w) / 2.).clamp(0., gaps)
-                        };
-
-                        let center = if area.size.w <= col_w {
-                            col_x - left_strut
-                        } else {
-                            col_x - (area.size.w - col_w) / 2. - left_strut
-                        };
-                        let is_overflowing = |adj_col_w: Option<f64>| {
-                            center_on_overflow
-                                && adj_col_w
-                                    .filter(|adj_col_w| {
-                                        // NOTE: This logic won't work entirely correctly with small
-                                        // fixed-size maximized windows (they have a different area
-                                        // and padding).
-                                        center_on_overflow
-                                            && adj_col_w + 3.0 * gaps + col_w > area.size.w
-                                    })
-                                    .is_some()
-                        };
-
-                        let left = if is_overflowing(next_col_w) {
-                            center
-                        } else {
-                            col_x - padding - left_strut
-                        };
-                        let right = if is_overflowing(prev_col_w) {
-                            center + view_width
-                        } else {
-                            col_x + col_w + padding + right_strut
-                        };
-                        (left, right)
-                    }
-                };
-
             // Prevent the gesture from snapping further than the first/last column, as this is
             // generally undesired.
-            //
-            // It's ok if leftmost_snap is > rightmost_snap (this happens if the columns on a
-            // workspace total up to less than the workspace width).
-
-            // The first column's left snap isn't actually guaranteed to be the *leftmost* snap.
-            // With weird enough left strut and perhaps a maximized small fixed-size window, you
-            // can make the second window's left snap be further to the left than the first
-            // window's. The same goes for the rightmost snap.
-            //
-            // This isn't actually a big problem because it's very much an obscure edge case. Just
-            // need to make sure the code doesn't panic when that happens.
-            let leftmost_snap = snap_points(
-                0.,
-                &self.columns[0],
-                None,
-                self.columns.get(1).map(|c| c.width()),
-            )
-            .0;
+            let (leftmost_snap, rightmost_snap) = self.edge_snaps().unwrap();
             let last_col_idx = self.columns.len() - 1;
-            let last_col_x = self
-                .columns
-                .iter()
-                .take(last_col_idx)
-                .fold(0., |col_x, col| col_x + col.width() + gaps);
-            let rightmost_snap = snap_points(
-                last_col_x,
-                &self.columns[last_col_idx],
-                last_col_idx
-                    .checked_sub(1)
-                    .and_then(|idx| self.columns.get(idx).map(|c| c.width())),
-                None,
-            )
-            .1 - view_width;
 
             snapping_points.push(Snap {
                 view_pos: leftmost_snap,
@@ -3405,7 +3430,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
             let mut col_x = 0.;
             for (col_idx, col) in self.columns.iter().enumerate() {
-                let (left, right) = snap_points(
+                let (left, right) = self.column_snap_points(
                     col_x,
                     col,
                     col_idx
