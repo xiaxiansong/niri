@@ -855,6 +855,7 @@ fi
 | M2a | ✅ 2026-10-05 | `acc33e09` 清理辅助函数、`f6bb247f` `ensure_empty_workspaces_after_add`、`97c29645` 数据结构、`ef559bcf` 隐藏、`cf6206d7` 呈现与接口、`39bca733` 退出暂存区落点、`886a9374` 不变量、`70d20ac8` 测试 | `cargo test --all` 263 / 0 失败（niri lib 240）；慢测试 148；`scratchpad.rs` 共 14 个用例，关键实现点均做过反向验证 |
 | M2b | ✅ 2026-10-05 | `69521a77` A 类、`4246ec5b` C/C'/C'' 类、`cda56e5b` 子窗口、`589b3c1d` proptest Op、`075ed4c9` 测试 | `cargo test --all` 267 / 0 失败（niri lib 244）；慢测试 152；`scratchpad.rs` 共 18 个用例；`random_operations_dont_panic` 10 轮 × 5000 cases，另有 256 + 3000 + 10000 cases 的单独运行，共约 6.3 万 cases，无 panic |
 | M3 | ✅ 2026-10-05 | `34ac9026` IPC 窗口字段、`9f2bbf3d` 可见性兜底、`e3ee7cf4` 动作与副作用入口、`c6225784` D14/D15/D16、`e51627b6` wiki、`3dc06bbe` `142cefb7` 客户端测试；文档 `cc5cdd32` `9388edb2` `68c0d3c8` | `cargo test --all` 275 / 0 失败（niri lib 252）；慢测试 152；`src/tests/scratchpad.rs` 共 8 个用例；日常使用版本已打包（M1 + M2 + M3，28 个补丁）：`niri-git 26.04.r193.gf15e90b-1`（旧包 r173 移到打包目录的 `old/`） |
+| M4 | ✅ 2026-10-05 | `a6437a0a` 单一出口重构、`c95a2c1f` `scratchpad_follow()`、`bb6a3713` 调用点、`386fe373` 不变量 4、`81c67779` 测试、`ac32e72f` 激活不被抢焦点、`8b9d6850` 其测试、`659a6cd6` 客户端 enter/leave 测试、`58abd90d` wiki；文档 `43676d17` `c8f1b387` `eb8dc0a8` | `cargo test --all` 283 / 0 失败（niri lib 260）；慢测试 158；`random_operations_dont_panic` 13 轮 × 5000 cases 无 panic；layout `scratchpad.rs` 24 个用例、`src/tests/scratchpad.rs` 10 个用例 |
 
 M1b 补充说明：
 
@@ -903,6 +904,18 @@ M3 补充说明：
 - 发现：`Niri::mru_apply_keyboard_commit()` 只遍历工作区。窗口在焦点防抖期间被隐藏时，待提交的焦点时间戳会被丢弃；无害，未改。
 - 嵌套冒烟测试（ghostty，经嵌套 niri 的 IPC 驱动）：隐藏平铺/浮动窗口、`--app-id` 选择器呈现与再隐藏、通用键 A→B→A 轮换、平铺窗口首次呈现为工作区 60%、D13 与无效正则的错误信息、`remove-window-from-scratchpad`（Shown 与按 id 的 Hidden）、`focus-window --id` 呈现隐藏窗口、`focus-window-previous` 不选隐藏窗口、`close-window --id` 关闭隐藏窗口、事件流中 Shown→None 的事件、截图确认 dropdown 位置。日志无 ERROR、无 panic。未做（需人工）：弹出菜单、真实程序的对话框、MRU 打开时隐藏、视频播放器息屏、DMS 任务栏、多显示器。
 - 风险（未验证）：libadwaita 等在窗口内部绘制的对话框不是子 toplevel，D10 无法据此呈现父窗口；程序在隐藏窗口里弹出这类确认框时，窗口会保持隐藏。手动测试时留意。
+
+M4 补充说明：
+
+- 文档修订（均先改文档再写代码）：§4.7 伪代码第 5 步（无切换时立即 `clean_up_workspaces()`，否则违反现有“无切换时不能有非活动空工作区”不变量）；§4.7 调用点加 `Monitor::insert_workspace()`（`move-workspace-to-monitor` 移动未聚焦显示器的活动工作区）；§4.7 记录 `active_workspace_idx` 赋值核对表；§4.3 规则 3 改为只作用于其他显示器（同显示器分支到不了，源工作区清理作为防御保留）；§4.4 激活具体窗口引起的跟随不抢焦点；§5.1 示例按键改为 Z 系列（`Mod+M` 也与默认配置冲突）。
+- 焦点问题（实现后发现）：`Layout::activate_window()` 等路径先在目标工作区内激活窗口、再切换工作区，跟随会把原焦点暂存窗口激活，抢走焦点（任务栏、Alt-Tab、`focus-window --id` 都会碰到）。修复为切换后对目标窗口再激活一次，共 5 处：`Layout::activate_window()`、`activate_window_without_raising()`（focus-follows-mouse，实现时补入）、`Monitor::add_tile()` / `add_column()` / `add_tile_to_column()`。其中 `add_tile_to_column()` 唯一调用者是 Overview 外的拖放，目标总是已激活的工作区，不会触发跟随，该处无法用测试覆盖，按文档保留。
+- `shown_window_elsewhere_is_brought_over`：经用户同意删掉两个同显示器场景（跟随实现后无法构造）；它们原来的期望值（`output1 ws 1/3`、`ws 0/2`）由跟随用例以相同结果覆盖。
+- 用例对照：8 `shown_window_follows_workspace_switch`（键盘、手势、`Monitor::add_tile` 激活；手势进行中窗口留在旧工作区）；9 `follow_adds_empty_workspaces`（底部、`empty-workspace-above-first` 顶部、previous workspace）；10 `unfocused_shown_window_follows_without_focus`（目标为平铺焦点/浮动焦点）；11 `follow_keeps_stacking_order`；14 `shown_window_follows_workspace_to_other_output`（移除显示器、无切换时立即清理、`add_output` 时工作区回到原显示器但未激活、`insert_workspace` 不激活）；另加 `activated_window_keeps_focus_when_shown_window_follows`。期望值均先手算，首次运行即全部符合。
+- 反向验证（逐个去掉后确认确定性用例失败，再从 git 还原）：5 个调用点、焦点保留、从下到上加入、`ensure_empty_workspaces_after_add`、无切换时清理、焦点修复的 4 处（`add_tile_to_column` 见上）。只去掉焦点保留时，键盘场景测不出（目标工作区平铺层为空时浮动层总会成为活动层），由层叠顺序与移除显示器用例覆盖。
+- **随机测试兜不住遗漏的调用点**：分别去掉调用点后各跑 5000 cases，只有 `activate_workspace` 被抓到（27 秒）；手势结束、`insert_workspace`、`add_output`、`append_workspaces` + `remove_output` 均未被发现。原因是随机序列很少同时满足“有显示中的暂存窗口”和该路径的前置条件。遗漏主要靠确定性用例防护；`refresh()` 兜底只在实际运行中起作用（测试中 refresh 是独立 Op，每个 Op 之后都会检查不变量，兜底掩盖不了遗漏）。
+- 陷阱 3：测试客户端扩展为记录 `wl_surface.enter/leave`（`OutputEvent`，带输出名；与测试放在同一提交，否则单独提交会有未使用警告）。smithay 的 `Output::enter()` 会去重，所以跟随时 `enter_output = true` 对客户端不可见；真正要防的是 `output_leave`，反向验证（取出时调用 `output_leave`）确认用例失败。移除显示器时恰好一次 leave + 一次 enter（来自工作区 `set_output`）。
+- 嵌套冒烟测试（ghostty，经 IPC 驱动）：通过 app-id 呈现后上下切换工作区，窗口跟随且保持焦点；新增/清理空工作区正确；`focus-window --id` 跳到其他工作区的窗口时焦点在目标窗口，暂存窗口跟随但不抢焦点；未聚焦时普通切换不抢焦点；事件流中 `workspace_id` 随每次跟随更新；截图确认位置。日志无 ERROR、无 panic（仅上游已有的 winit/touch WARN）。未做（需人工）：Overview 中跟随、触控板手势、多显示器插拔。
+- 待定：M3 手动测试反馈（模板已给用户，日常使用中填写）；窗口内部绘制对话框的风险暂按 (a) 已知限制处理，待反馈。
 
 ---
 
