@@ -858,6 +858,7 @@ fi
 | M3 | ✅ 2026-10-05 | `34ac9026` IPC 窗口字段、`9f2bbf3d` 可见性兜底、`e3ee7cf4` 动作与副作用入口、`c6225784` D14/D15/D16、`e51627b6` wiki、`3dc06bbe` `142cefb7` 客户端测试；文档 `cc5cdd32` `9388edb2` `68c0d3c8` | `cargo test --all` 275 / 0 失败（niri lib 252）；慢测试 152；`src/tests/scratchpad.rs` 共 8 个用例；日常使用版本已打包（M1 + M2 + M3，28 个补丁）：`niri-git 26.04.r193.gf15e90b-1`（旧包 r173 移到打包目录的 `old/`） |
 | M4 | ✅ 2026-10-05 | `a6437a0a` 单一出口重构、`c95a2c1f` `scratchpad_follow()`、`bb6a3713` 调用点、`386fe373` 不变量 4、`81c67779` 测试、`ac32e72f` 激活不被抢焦点、`8b9d6850` 其测试、`659a6cd6` 客户端 enter/leave 测试、`58abd90d` wiki；文档 `43676d17` `c8f1b387` `eb8dc0a8` | `cargo test --all` 283 / 0 失败（niri lib 260）；慢测试 158；`random_operations_dont_panic` 13 轮 × 5000 cases 无 panic；layout `scratchpad.rs` 24 个用例、`src/tests/scratchpad.rs` 10 个用例 |
 | M5a | ✅ 2026-10-06 | `9da35e66` 提取 static offset、`2a4d36ca` 钉住渲染、`80d3a0dc` 钉住命中、`8e0ad0dd` 跟随保持屏幕位置（换算部分随后由 `c3c37d53` 删除）、`591db6ec` Overview 中滑入（P3）、`b74cdcfa` Overview 交接（P4）、`256826d6` 工作区离开显示器时留下（P5）、`213bcd84` 测试、`4a4be535` wiki；M4 遗留修复 `9de6e32d` `6c2cba42` `02493b09`；文档 `65a1bc45` `b1f8899e` `d846c86d` | `cargo test --all` 295 / 0 失败（niri lib 272）；慢测试 168；`random_operations_dont_panic` 20 轮 × 5000 cases（修复前 10 轮中 4 轮失败，修复后 10 轮无 panic）；layout `scratchpad.rs` 33 个用例、`src/tests/scratchpad.rs` 12 个用例 |
+| M5b | ✅ 2026-10-06 | `f1fdcfeb` 记录与簿记、`a59e32b6` 渲染与快照钩子、`f6fbf9f2` 不可见时不创建记录、`4d80ef8b` 从进度呈现与规则 3 动画、`8ab7fc0a` 测试、`dda0f970` wiki；文档 `dbacfe8a` `13945c80` `5ac7823a` `90811791` | `cargo test --all` 302 / 0 失败（niri lib 279）；慢测试 175；`random_operations_dont_panic` 26 轮 × 5000 cases 无 panic；layout `scratchpad.rs` 40 个用例、`src/tests/scratchpad.rs` 12 个用例（未变） |
 
 M1b 补充说明：
 
@@ -933,6 +934,17 @@ M5a 补充说明：
 - 嵌套 niri（`animations { slowdown 10; }`，scale 1.5，ghostty，经 IPC 驱动）：键盘切换过程中截图 5 张，屏幕其余部分在变，暂存窗口区域与静止时逐像素相同（唯一差异是终端文本光标闪烁）。日志无 ERROR、无 panic。未做（需人工）：触控板手势、Overview 中的滑入与交接、多显示器插拔与 `move-workspace-to-monitor`。
 - 提交历史：`8e0ad0dd` 加入的换算随后由 `c3c37d53` 删除，打包前可用 fixup 合并（待用户决定）。
 - 日常使用反馈：正常。
+
+M5b 补充说明：
+
+- 开始前按源码核对 §9.3（经用户同意先改文档）：OpenAnimation 可直接渲染 `TileRenderSnapshot` 的内容（与 `Tile::render()` 开窗分支同类型），记录持有快照会让客户端 wl_buffer 晚一段动画时间释放；生成快照前需对隐藏 Tile `update_render_elements()`；第 0 步的输出由新增的 `Layout::hiding_window_output()` 取得；释放集中到 `Workspace::set_output()`；记录也算入 `are_transitions_ongoing()`；已知限制三条（切换动画中隐藏、全屏挡住时无动画、平铺窗口首次隐藏的位置）。
+- 实现中发现（经用户同意补入 §9.3.2）：同一活动工作区里不可见的 Tile（标签页列的非活动标签页、被聚焦的全屏窗口挡住的浮动窗口）用 `--id` 隐藏时不应创建记录，否则前者会凭空出现再淡出、后者在动画时间内再呈现会从中途开始。判断用 `tiles_with_render_positions()` 的 `visible` 标志，单独提交 `f6fbf9f2`。
+- 实现细节：代次在判断可见性之前分配，不可见时被跳过（无害，用例 2 的注释写明）。从进度呈现在 `scratchpad_show` 中对取出的 Tile 调用 `start_open_animation_from(v)`，不再经 `Workspace::start_open_animation()`；规则 3 同样在加入前调用 `start_open_animation()`。
+- 用例对照（§9.3.3）：1 `hiding_on_active_workspace_animates`（含 `hiding_window_output()`、`are_animations_ongoing()`、动画结束后丢弃）；2 `hiding_without_animation`（非活动工作区、window-open off、无输出、非活动标签页、全屏挡住的浮动窗口）；3 `showing_while_hiding_continues_from_progress`（通用切换与 `activate_window`）；4 `hiding_while_opening_starts_from_progress`；5 `hiding_windows_are_released`（关窗、移除输出、切走后工作区被清理、`move-workspace-to-monitor`、插入显示器迁回）；6 `hide_show_hide_has_one_hiding_window`；7 `shown_window_brought_over_animates`；8 随机测试。期望值均按线性 100 ms 的 window-open 先手算。三处不符均为测试假设错误：两处作为上下文的工作区列表（`append_workspaces()` 把末尾空的活动工作区挪到最后；`move-workspace-to-monitor` 激活后清理目标原来的空工作区）、一处漏了 `CompleteAnimations`（全屏后视图仍在动画，`render_above_top_layer()` 为 false，浮动窗口此时确实可见）。行为期望未改。
+- 反向验证（逐个去掉后确认对应用例失败，再从 git 还原）：活动工作区条件、可见性条件、window-open off 条件、v0 取开窗进度、呈现时删除记录、呈现时取进度、关窗时删除记录、`set_output()` 释放（三个子场景各自失败）、`advance_animations()` 丢弃、规则 3 动画、`are_animations_ongoing()`。gen 比较在现有不变量下恒成立（呈现总会先删记录），无法构造失败用例；呈现时重置 `scratchpad_hide_gen` 同样不可观测。
+- 随机测试命中（临时插桩，10000 cases）：创建记录 147 次、从进度呈现 18 次、`set_output()` 释放 2 次、收起中关窗 1 次。
+- 嵌套 niri（`animations { slowdown 10; }`，scale 1.5，ghostty，经 IPC 驱动，PIL 测外接框与平均色差）：收起时窗口以中心缩到 0.5 倍并淡出（中心 599 → 600），内容为窗口快照；收起中途呈现，外接框 580×386 → 596×396 后连续增大，无跳变；呈现中途隐藏，634×422 → 636×422 后连续缩小；平铺窗口在平铺位置收起。日志无 ERROR、WARN、panic。未做（需人工）：规则 3（需两块显示器）、Overview 中收起、custom-shader、录屏中的屏蔽内容、真实弹出菜单进入快照。
+- 未被用例覆盖：渲染与快照本身（F16），包括 niri 层第 0 步、按 RenderTarget 选内容、xray 位置。
 
 ---
 
