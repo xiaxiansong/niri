@@ -3606,6 +3606,31 @@ impl<W: LayoutElement> Layout<W> {
             None => self.focus()?.id().clone(),
         };
 
+        self.scratchpad_hide(&id, true)
+    }
+
+    /// Moves a window that was just added to the layout to the scratchpad.
+    ///
+    /// Unlike `move_to_scratchpad()`, this never plays the hiding animation, since the window has
+    /// not been shown yet. With `show` set, the window is then shown on the active workspace,
+    /// activated if `show` is `Some(true)`. Without outputs, it stays hidden.
+    ///
+    /// Returns whether the window is in the scratchpad now.
+    #[allow(dead_code)]
+    pub fn move_new_window_to_scratchpad(&mut self, window: &W::Id, show: Option<bool>) -> bool {
+        if self.scratchpad_hide(window, false).is_none() {
+            return false;
+        }
+
+        if let Some(activate) = show {
+            self.scratchpad_show(window, activate);
+        }
+        true
+    }
+
+    fn scratchpad_hide(&mut self, id: &W::Id, animate: bool) -> Option<W::Id> {
+        let id = id.clone();
+
         match &self.interactive_move {
             Some(InteractiveMoveState::Starting { window_id, .. }) if *window_id == id => {
                 return None;
@@ -3634,7 +3659,8 @@ impl<W: LayoutElement> Layout<W> {
                 .any(|mon| mon.workspaces[mon.active_workspace_idx].has_window(&id)),
             MonitorSet::NoOutputs { .. } => false,
         };
-        let animate = is_on_active_workspace && !self.options.animations.window_open.anim.off;
+        let animate =
+            animate && is_on_active_workspace && !self.options.animations.window_open.anim.off;
         let hide_gen = animate.then(|| {
             let gen = self.scratchpad.next_gen;
             self.scratchpad.next_gen += 1;

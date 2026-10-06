@@ -456,6 +456,12 @@ enum Op {
     AddWindow {
         params: TestWindowParams,
     },
+    /// Adds a window like the map handler does for `open-in-scratchpad`: without activating, then
+    /// moving it to the scratchpad.
+    AddWindowToScratchpad {
+        params: TestWindowParams,
+        show: Option<bool>,
+    },
     AddWindowNextTo {
         params: TestWindowParams,
         #[proptest(strategy = "1..=5usize")]
@@ -942,6 +948,27 @@ impl Op {
                     is_floating,
                     ActivateWindow::default(),
                 );
+            }
+            Op::AddWindowToScratchpad { mut params, show } => {
+                if layout.has_window(&params.id) {
+                    return;
+                }
+                // The map handler ignores the rule for windows with a parent.
+                params.parent_id = None;
+
+                let is_floating = params.is_floating;
+                let id = params.id;
+                let win = TestWindow::new(params);
+                layout.add_window(
+                    win,
+                    AddWindowTarget::Auto,
+                    None,
+                    None,
+                    false,
+                    is_floating,
+                    ActivateWindow::No,
+                );
+                layout.move_new_window_to_scratchpad(&id, show);
             }
             Op::AddWindowNextTo {
                 mut params,
