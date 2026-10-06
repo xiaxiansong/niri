@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use client::ClientId;
 use insta::assert_snapshot;
-use niri_config::Action;
+use niri_config::{Action, Config};
 use smithay::backend::renderer::element::{
     Id, PrimaryScanoutOutput, RenderElementPresentationState, RenderElementState,
     RenderElementStates,
@@ -62,15 +62,35 @@ fn set_up() -> (Fixture, ClientId) {
     (f, id)
 }
 
+fn set_up_with_config(config: &str) -> (Fixture, ClientId) {
+    let mut f = Fixture::with_config(Config::parse_mem(config).unwrap());
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    (f, id)
+}
+
 fn map_window(
     f: &mut Fixture,
     id: ClientId,
     title: &str,
     parent: Option<&XdgToplevel>,
 ) -> WlSurface {
+    map_window_with_app_id(f, id, title, None, parent)
+}
+
+fn map_window_with_app_id(
+    f: &mut Fixture,
+    id: ClientId,
+    title: &str,
+    app_id: Option<&str>,
+    parent: Option<&XdgToplevel>,
+) -> WlSurface {
     let window = f.client(id).create_window();
     let surface = window.surface.clone();
     window.set_title(title);
+    if let Some(app_id) = app_id {
+        window.set_app_id(app_id);
+    }
     if parent.is_some() {
         window.set_parent(parent);
     }
@@ -543,4 +563,224 @@ fn shown_window_stays_on_output_when_workspace_goes_back_to_its_output() {
     assert!(is_on_active_workspace_of(&mut f, &output1, "a"));
     assert!(is_on_active_workspace_of(&mut f, &output2, "b"));
     assert_snapshot!(output_events(&mut f, id, &surface), @"");
+}
+
+const DROPDOWN_RULE: &str = r#"
+window-rule {
+    match app-id="^dd$"
+    open-in-scratchpad true
+}
+"#;
+
+#[test]
+fn open_in_scratchpad_rule() {
+    let (errors, _guard) = ErrorCollector::install();
+    let (mut f, id) = set_up_with_config(DROPDOWN_RULE);
+    map_window(&mut f, id, "other", None);
+
+    let dd = map_window_with_app_id(&mut f, id, "dd", Some("dd"), None);
+    assert_snapshot!(
+        format_windows(&mut f),
+        @r"
+    dd: Hidden, floating: true, workspace: false, focused: false
+    other: None, floating: false, workspace: true, focused: true
+    "
+    );
+    // The window never gets the focus, so it never gets Activated.
+    let window = f.client(id).window(&dd);
+    assert!(!window.format_recent_configures().contains("Activated"));
+    // It was never visible, so there is no hiding animation.
+    let dd_win = dd_window(&mut f);
+    assert!(f.niri().layout.hiding_window_output(&dd_win).is_none());
+
+    // The first show uses 60% of the working area.
+    f.niri_state()
+        .do_action(Action::ScratchpadShow(None), false);
+    f.double_roundtrip(id);
+    assert_snapshot!(
+        format_windows(&mut f),
+        @r"
+    dd: Shown, floating: true, workspace: true, focused: true
+    other: None, floating: false, workspace: true, focused: false
+    "
+    );
+    let window = f.client(id).window(&dd);
+    assert_snapshot!(
+        window.format_recent_configures(),
+        @"size: 1152 × 648, bounds: 1920 × 1080, states: [Activated]"
+    );
+
+    assert_eq!(errors.errors(), Vec::<String>::new());
+}
+
+fn dd_window(f: &mut Fixture) -> smithay::desktop::Window {
+    let mut windows = f.niri().layout.windows();
+    let (_, mapped) = windows.find(|(_, mapped)| title(mapped) == "dd").unwrap();
+    mapped.window.clone()
+}
+
+fn rules_of(f: &mut Fixture, t: &str) -> String {
+    let mut windows = f.niri().layout.windows();
+    let (_, mapped) = windows.find(|(_, mapped)| title(mapped) == t).unwrap();
+    format!(
+        "{:?}, opacity: {:?}, open-in-scratchpad: {:?}",
+        mapped.scratchpad_state(),
+        mapped.rules().opacity,
+        mapped.rules().open_in_scratchpad,
+    )
+}
+
+#[test]
+fn rules_do_not_flip_scratchpad_state() {
+    let (errors, _guard) = ErrorCollector::install();
+    // The matcher on is-in-scratchpad turns open-in-scratchpad off while in the scratchpad and on
+    // again outside of it. If recomputing the rules acted on it, the window would go back and
+    // forth.
+    let (mut f, id) = set_up_with_config(
+        r#"
+window-rule {
+    match app-id="^dd$"
+    open-in-scratchpad true
+}
+window-rule {
+    match app-id="^dd$" is-in-scratchpad=true
+    open-in-scratchpad false
+    opacity 0.5
+}
+window-rule {
+    match app-id="^dd$" is-in-scratchpad=false
+    open-in-scratchpad true
+}
+"#,
+    );
+    map_window_with_app_id(&mut f, id, "dd", Some("dd"), None);
+    f.double_roundtrip(id);
+    assert_snapshot!(
+        rules_of(&mut f, "dd"),
+        @"Hidden, opacity: Some(0.5), open-in-scratchpad: Some(false)"
+    );
+
+    f.niri_state()
+        .do_action(Action::ScratchpadShow(None), false);
+    f.double_roundtrip(id);
+    assert_snapshot!(
+        rules_of(&mut f, "dd"),
+        @"Shown, opacity: Some(0.5), open-in-scratchpad: Some(false)"
+    );
+
+    f.niri_state()
+        .do_action(Action::RemoveWindowFromScratchpad, false);
+    f.double_roundtrip(id);
+    assert_snapshot!(
+        rules_of(&mut f, "dd"),
+        @"None, opacity: None, open-in-scratchpad: Some(true)"
+    );
+
+    // And still not hidden after another round of refreshing.
+    f.double_roundtrip(id);
+    assert_snapshot!(
+        rules_of(&mut f, "dd"),
+        @"None, opacity: None, open-in-scratchpad: Some(true)"
+    );
+
+    assert_eq!(errors.errors(), Vec::<String>::new());
+}
+
+#[test]
+fn is_in_scratchpad_matcher() {
+    let (mut f, id) = set_up_with_config(
+        r#"
+window-rule {
+    match is-in-scratchpad=true
+    opacity 0.5
+}
+"#,
+    );
+    map_window(&mut f, id, "a", None);
+    f.double_roundtrip(id);
+    // The window matched as a regular one when it opened.
+    assert_snapshot!(rules_of(&mut f, "a"), @"None, opacity: None, open-in-scratchpad: None");
+
+    f.niri_state()
+        .do_action(Action::MoveWindowToScratchpad, false);
+    f.double_roundtrip(id);
+    assert_snapshot!(rules_of(&mut f, "a"), @"Hidden, opacity: Some(0.5), open-in-scratchpad: None");
+
+    f.niri_state()
+        .do_action(Action::ScratchpadShow(None), false);
+    f.double_roundtrip(id);
+    assert_snapshot!(rules_of(&mut f, "a"), @"Shown, opacity: Some(0.5), open-in-scratchpad: None");
+
+    f.niri_state()
+        .do_action(Action::RemoveWindowFromScratchpad, false);
+    f.double_roundtrip(id);
+    assert_snapshot!(rules_of(&mut f, "a"), @"None, opacity: None, open-in-scratchpad: None");
+}
+
+#[test]
+fn open_in_scratchpad_ignored_for_dialogs() {
+    let (mut f, id) = set_up_with_config(DROPDOWN_RULE);
+    let parent = map_window(&mut f, id, "parent", None);
+    let parent = f.client(id).window(&parent).xdg_toplevel.clone();
+
+    map_window_with_app_id(&mut f, id, "dd", Some("dd"), Some(&parent));
+    assert_snapshot!(
+        format_windows(&mut f),
+        @r"
+    dd: None, floating: true, workspace: true, focused: true
+    parent: None, floating: false, workspace: true, focused: false
+    "
+    );
+}
+
+#[test]
+fn open_in_scratchpad_ipc_starts_hidden() {
+    let (mut f, id) = set_up_with_config(DROPDOWN_RULE);
+    map_window_with_app_id(&mut f, id, "dd", Some("dd"), None);
+    f.double_roundtrip(id);
+    assert_snapshot!(
+        check_ipc(&mut f),
+        @"in scratchpad: true, hidden: true, workspace: false"
+    );
+}
+
+#[test]
+fn open_in_scratchpad_floating_window_shows_where_it_opened() {
+    let (mut f, id) = set_up_with_config(
+        r#"
+window-rule {
+    match app-id="^dd$"
+    open-in-scratchpad true
+    open-floating true
+    default-floating-position x=20 y=30
+}
+"#,
+    );
+    let dd = map_window_with_app_id(&mut f, id, "dd", Some("dd"), None);
+    f.double_roundtrip(id);
+
+    f.niri_state()
+        .do_action(Action::ScratchpadShow(None), false);
+    f.double_roundtrip(id);
+
+    let pos = {
+        let ws = f.niri().layout.active_workspace().unwrap();
+        let (_, pos) = ws
+            .floating()
+            .tiles_with_offsets()
+            .find(|(tile, _)| title(tile.window()) == "dd")
+            .unwrap();
+        (pos.x, pos.y)
+    };
+    assert_eq!(pos, (20., 30.));
+    // The window keeps the size it opened with, instead of the default for the first show.
+    let window = f.client(id).window(&dd);
+    assert_snapshot!(
+        window.format_recent_configures(),
+        @r"
+    size: 0 × 0, bounds: 1920 × 1080, states: []
+    size: 100 × 100, bounds: 1920 × 1080, states: []
+    size: 100 × 100, bounds: 1920 × 1080, states: [Activated]
+    "
+    );
 }
