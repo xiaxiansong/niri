@@ -1221,3 +1221,244 @@ pub struct HidingWindow<Id> {
 | P6 | 收起/展开 = window-open 倒放/正放，不新增配置 |
 | P7 | 规则 3 搬动时播呈现动画 |
 | P8 | 收起快照用工作区坐标，存于 Workspace |
+
+---
+
+## 10. M6 详细设计
+
+- 定稿：2026-10-06（M5b 完成后）。源码基线 `a7194c72`，行号为“约”，以函数名为准。
+- 范围：窗口规则 `is-in-scratchpad` 匹配器、`open-in-scratchpad` 属性；再映射保留暂存身份（§8 标为可选，建议做，见 P11）。
+- 取舍点 P9–P14 已由用户决定（2026-10-06，均为推荐项），见 §10.10。
+
+### 10.1 源码事实
+
+| # | 事实 | 位置 |
+|---|---|---|
+| G1 | `Match` 的每个布尔匹配器是 `#[knuffel(property)] Option<bool>`；`WindowRule` 的开窗属性是 `#[knuffel(child, unwrap(argument))] Option<bool>`。`niri-config/src/lib.rs` 的内联调试快照（解析测试）里有 3 处 `Match { .. }` 字面量输出和 1 处 `WindowRule` 输出，加字段会让它们多出 `is_in_scratchpad: None` / `open_in_scratchpad: None` | `niri-config/src/window_rule.rs`、`lib.rs` 约 1760–1830 |
+| G2 | `ResolvedWindowRules::compute()` 按配置顺序遍历规则，对每个 `Some(x)` 直接覆盖（后者赢），`open_floating` 等都是 `Option<bool>`，结构体 `Default + PartialEq`（`Mapped::recompute_window_rules` 用 `==` 判断是否变化）。没有合并语义需要特殊处理 | `src/window/mod.rs` 约 190–330 |
+| G3 | 布尔匹配器由 `WindowRef` 的方法提供，`window_matches()` 里按“`if let Some(x) = m.xxx { if window.xxx() != x { return false } }`”逐个判断。**`is_floating` 与 `is_window_cast_target` 是最贴近的模板**：`WindowRef::Unmapped(_) => false`，`Mapped(m) => m.xxx()`。`is_floating` 上有 FIXME：Unmapped 恒为 false，因为它与 `open-floating` 构成环 | `src/window/mod.rs` 约 150–190、400–460 |
+| G4 | `Mapped::set_scratchpad_state()` 已在状态变化时置 `need_to_recompute_rules`（§4.5.0）。每帧 `Niri::refresh_window_rules()` 经 `with_windows_mut()`（A 类，含隐藏窗口）对需要的窗口重算，随后 `layout.update_window(win, None)`（隐藏窗口走隐藏分支）。配置重载走 `Niri::recompute_window_rules()`，对 Unmapped 与 Mapped 都重算 | `mapped.rs` 约 328、1008；`niri.rs` 约 4265、7020 |
+| G5 | **映射后的规则读者**只有：`on_xdg_activate`（`handlers/mod.rs` 约 815，由客户端请求驱动）、`default_floating_position`（`floating.rs` 约 1299，窗口加入浮动层时）、`default_width/height`（`Layout::move_to_scratchpad` 的 D12，隐藏时）、以及渲染/配置类（border、opacity、block-out、VRR、scroll-factor 等）。`open_*`、`default_*`（初始尺寸）只在 Unmapped 阶段读取：`send_initial_configure()`、`maximize/unmaximize/fullscreen/unfullscreen_request()` 的 Configured 分支、`compositor.rs` 映射处 | grep `rules()\.` / `rules\.open_` |
+| G6 | 映射路径（`compositor.rs` 约 83–245）：解构 `Unmapped { window, state, activation_token_data }` → 取出 `rules` 等 → `compute_open_floating` → 算 `activate` → 找 `parent` → `Mapped::new(window, rules, ..)` → `Layout::add_window(.., is_floating, activate)` → 修正 pending maximized → `start_open_animation_for_window` → 焦点变化时移光标、`queue_redraw`。`Layout::add_window()` 只有这一个生产调用点（其余是测试）。`add_window` 本身**不**启动开窗动画，由映射路径随后调用 | 同上 |
+| G7 | 取消映射路径（`compositor.rs` 约 262–320）：`find_window_and_output` → 关窗动画 → `window.on_commit()` → `stop_casts_for_target` → `window_mru_ui.remove_window` → `layout.remove_window` → `Unmapped::new(window)` 放回 `niri.unmapped_windows`。`Unmapped` 一直存在到再次映射或 toplevel 被销毁；`Unmapped::new` 只有两处调用（`xdg_shell.rs` 约 57 新建 toplevel、此处取消映射）。取消映射时 `mapped` 仍可读，`mapped.scratchpad_state()` 给出身份，不需要从 `RemovedTile` 取（其 `tile` 字段对 niri 层不可见） | |
+| G8 | `Layout::add_window()` 的 `activate`：`activate.map_smart(..)` 为真时 `*active_monitor_idx = mon_idx`；`Monitor::add_window → add_tile` 在目标工作区最后一个时追加空工作区，并把非命名工作区的 `original_outputs` 设为本显示器。`ActivateWindow::No` 不切焦点、不切显示器、不切工作区 | `mod.rs` 约 1057、`monitor.rs` 约 522 |
+| G9 | `Layout::move_to_scratchpad()` 的动画条件在函数内部判断（源在活动工作区、window-open 未关、Tile 可见）；平铺窗口首次隐藏走 D12 并调用 `fill_view_after_removal()`；浮动窗口 `remove_tile` 时记录位置与尺寸。要求：无拖动、非已隐藏、无可见子窗口 | `mod.rs` 约 3603 |
+| G10 | 新窗口映射时尚未有开窗动画（G6），所以此刻 `tile.open_animation_progress()` 为 None → M5b 会按 v0 = 1 创建收起记录，niri 层再给一个从未渲染过的窗口生成快照，画面上会出现“窗口凭空出现再缩小消失”。**必须避免**，见 §10.4.2 | `mod.rs` 约 3668 |
+| G11 | 客户端测试里没有 `set_app_id`（只有 `set_title`）；`Fixture::with_config(Config::parse_mem(..))` 可带窗口规则；测试里用 `Mapped::rules()` 可读出解析结果 | `src/tests/client.rs`、`fixture.rs` |
+| G12 | IPC：窗口的 `is_in_scratchpad` / `is_scratchpad_hidden` 来自 `mapped.scratchpad_state()`；`ipc_refresh_windows()` 在每次 refresh 后才比较并发事件，映射处理函数内部不会被中途采样 | `src/ipc/server.rs` |
+
+### 10.2 配置（niri-config）
+
+```rust
+// window_rule.rs
+pub struct WindowRule {
+    ...
+    #[knuffel(child, unwrap(argument))]
+    pub open_focused: Option<bool>,
+    #[knuffel(child, unwrap(argument))]
+    pub open_in_scratchpad: Option<bool>,   // 新增，归入“映射时生效”的属性
+    #[knuffel(child, unwrap(argument))]
+    pub on_xdg_activate: Option<OnXdgActivate>,
+    ...
+}
+pub struct Match {
+    ...
+    #[knuffel(property)]
+    pub is_urgent: Option<bool>,
+    #[knuffel(property)]
+    pub is_in_scratchpad: Option<bool>,     // 新增
+    #[knuffel(property)]
+    pub at_startup: Option<bool>,
+}
+```
+
+- `ResolvedWindowRules` 加 `open_in_scratchpad: Option<bool>`（文档注释写明“只在映射时读取”），`compute()` 里照 `open_floating` 写：`if let Some(x) = rule.open_in_scratchpad { resolved.open_in_scratchpad = Some(x); }`。
+- `niri-config/src/lib.rs` 的内联解析快照用 `cargo insta` 更新：预期变化只有新增的 `None` 行。若解析测试的配置里想覆盖新字段，另加一个小测试，不改现有输入。
+- wiki：`Configuration:-Window-Rules.md` 的总览代码块加 `match is-in-scratchpad=true` 与 `open-in-scratchpad true`（该块由 `wiki-parses` 解析）；新增 `#### is-in-scratchpad`（仿 `is-floating`，含“Unmapped 恒为 false，不能用于开窗属性”的 NOTE）与 `#### open-in-scratchpad`（含下拉终端示例、与 `open-floating` / `default-*` 的组合建议、父窗口与再映射的行为）。`Configuration:-Key-Bindings.md` 的暂存区一节补一句指向窗口规则。
+
+### 10.3 `is-in-scratchpad`
+
+**语义**：Hidden 与 Shown 都算“在暂存区”（`scratchpad_state() != None`），与 IPC 的 `is_in_scratchpad` 一致。需要区分隐藏/显示时，隐藏窗口不渲染，规则对它没有视觉意义，所以不另设匹配器。
+
+**实现**（照 G3 的模板）：
+
+```rust
+// window/mod.rs, WindowRef
+pub fn is_in_scratchpad(self) -> bool {
+    match self {
+        // 与 is_floating 相同：不能用于开窗属性，否则与 open-in-scratchpad 构成环。
+        WindowRef::Unmapped(_) => false,
+        WindowRef::Mapped(mapped) => mapped.scratchpad_state() != ScratchpadState::None,
+    }
+}
+// window_matches() 里加一段，放在 is_floating 之后
+```
+
+`scratchpad_state()` 是 `LayoutElement` 的 trait 方法（M2a 说明），`window/mod.rs` 需 `use crate::layout::{LayoutElement as _, ScratchpadState}`。
+
+**重算时机**：不需要新增触发点。`set_scratchpad_state()` 已在状态变化时置位，下一次 `refresh_window_rules()` 重算；映射瞬间 Mapped 的状态为 None（`Mapped::new`），随后 `open-in-scratchpad` 隐藏（状态变为 Hidden）会置位，下一帧用新状态重算。
+
+**证明重算不会触发状态转换**：规则重算的全部效果是 `mapped.rules = new_rules` 加一次 `layout.update_window(win, None)` 与 `send_pending_configure()`。
+1. 状态转换的入口只有：用户动作（`do_action`）、`activate_window` 的调用者（xdg-activation、任务栏、`focus-window`）、新子窗口（D10）、拖动落点、取消映射，以及本里程碑新增的映射时钩子。规则重算不在其中。
+2. 映射后规则的读者见 G5：没有任何一个会调用 `move_to_scratchpad` / `scratchpad_show` / `activate_window`。其中 `on_xdg_activate` 会调用 `activate_window`，但它由客户端的 xdg-activation 请求驱动，不由重算驱动；`is-in-scratchpad` 匹配器可以改变它的取值（例如“暂存区里的窗口忽略激活请求”），这是用户配置的输入，不是循环。
+3. `open-in-scratchpad` 只在映射钩子里读取一次（§10.4.1），读的是 Unmapped 阶段的 `rules` 快照。映射后的重算即使把它从 `Some(true)` 变成别的值，也没有读者。
+4. 因此即使配置出 `match is-in-scratchpad=false { open-in-scratchpad true }` 这类“自相矛盾”的规则，也不会出现隐藏→显示→隐藏的振荡。测试用例 C3 构造这样的配置来验证。
+
+### 10.4 `open-in-scratchpad`
+
+#### 10.4.1 时机与落点
+
+唯一落点：`compositor.rs` 映射路径中 `Layout::add_window()` 之后、`start_open_animation_for_window` 之前（紧跟“修正 pending maximized”那一段）。此时窗口已经提交过首个缓冲区，有真实尺寸；`Mapped` 已在布局里，隐藏走现有的 `move_to_scratchpad` 逻辑，不需要新的“预入队”路径（§8 的“不能在无尺寸时入队”由此满足：不在初始 configure 时处理，也不在 `add_window` 之前处理）。
+
+```rust
+// compositor.rs，示意
+// scratchpad: None = 不进暂存区；Some(None) = 隐藏；Some(Some(activate)) = 呈现（§10.5）。
+let scratchpad = if parent.is_none() { decide(rules.open_in_scratchpad, was_in_scratchpad, activate) } else { None };
+...
+// 要进暂存区的窗口不抢焦点、不切显示器；需要呈现的在钩子里按 activate 激活
+let add_activate = if scratchpad.is_some() { ActivateWindow::No } else { activate };
+let output = layout.add_window(mapped, target, width, height, is_full_width, is_floating, add_activate);
+...（修正 pending maximized 不变）
+if let Some(show) = scratchpad {
+    if layout.move_new_window_to_scratchpad(&window, show) && layout.is_scratchpad_hidden(window.id()) {
+        self.on_window_hidden_to_scratchpad(&window);
+    }
+}
+```
+
+#### 10.4.2 Layout 接口
+
+把 `Layout::move_to_scratchpad` 的主体提取为私有的 `scratchpad_hide(&mut self, id: &W::Id, animate: bool) -> Option<W::Id>`；`animate` 为 false 时不创建收起记录（G10）。公开方法：
+
+```rust
+/// Moves a window that was just added to the layout into the scratchpad.
+///
+/// Unlike `move_to_scratchpad()`, this never plays the hiding animation: the window has not been
+/// shown yet. With `show` set, the window is then shown on the active workspace of the active
+/// monitor, activated if `show` is `Some(true)`. Without outputs, it stays hidden.
+pub fn move_new_window_to_scratchpad(&mut self, window: &W::Id, show: Option<bool>) -> bool
+```
+
+- `move_to_scratchpad(window)` = 找 id → `scratchpad_hide(id, true)`，行为不变（M5b 用例全部不变）。
+- `move_new_window_to_scratchpad`：`scratchpad_hide(id, false)`；失败（理论上只有拖动/子窗口，新窗口都不会遇到）返回 false，窗口保持普通窗口；成功后 `show` 为 `Some(activate)` 时调用 `scratchpad_show(id, activate)`（无输出时返回 false，窗口留在队列里）。返回值表示“窗口是否已进入暂存区”，niri 层据此调用副作用入口；若随后又被呈现（`is_scratchpad_hidden` 为假）则不调用。
+- 不新增 `Layout::add_window` 参数（已 `#[allow(clippy::too_many_arguments)]`），也不改 `AddWindowTarget`。
+- 隐藏时的 D12：平铺窗口首次隐藏用规则值 `default-column-width / default-window-height` 或 60%×60%；`open-floating true` 的窗口本来就在浮动层，`remove_tile` 记录了它的位置与尺寸（`default-floating-position` 在加入浮动层时已生效），首次呈现与隐藏前一致。
+- 副作用：`State::on_window_hidden_to_scratchpad()` 照常调用（§4.8 五步；第 0 步因无记录而跳过，其余步骤对新窗口无害，保持“统一入口”）。M5b 的 `hiding_window_output()` 因没有记录返回 None。
+
+#### 10.4.3 与其他规则、状态的交互
+
+| 项 | 行为 | 理由 |
+|---|---|---|
+| `open-floating` | 不互相蕴含。`true`：窗口在浮动层打开，首次呈现的尺寸/位置就是打开时的；`false`/未设：平铺打开，首次隐藏走 D12。wiki 示例推荐“下拉终端 = `open-floating true` + `default-column-width/height` + `default-floating-position` + `open-in-scratchpad true`” | 保持可组合（P12） |
+| `open-on-output` / `open-on-workspace` | 只影响初始 configure 与隐藏前的落点（D12 尺寸按该工作区计算）；呈现时总是当前活动显示器的活动工作区（与 `scratchpad-show` 一致） | 暂存窗口属于“呈现时的显示器” |
+| `open-focused`、激活令牌 | 对隐藏的窗口无效（用 `ActivateWindow::No` 添加，不抢焦点、不切显示器）。对“再映射呈现”的窗口有效，见 §10.5 | 隐藏的窗口不应改变焦点 |
+| `open-fullscreen` / `open-maximized(-to-edges)` | 隐藏时 `set_fullscreen(false)` / `set_maximized(false)` 取消它们（M2a），呈现为普通浮动窗口。wiki 写明“暂存区优先” | 暂存窗口不能是全屏/最大化 |
+| `default-column-width` / `default-window-height` | D12 的第二级回退，不变 | |
+| `default-floating-position` | 呈现时由浮动层按规则或居中决定（`floating_pos` 为 None 时）；`open-floating true` 时打开时已定好 | |
+| 带 parent 的新窗口（D10） | **规则被忽略**，按普通对话框处理，打 `debug!` | 对话框通常是模态的，隐藏会让程序看似卡死；父窗口隐藏时 D10 已规定先呈现父窗口，再隐藏子窗口自相矛盾（P9） |
+| 无输出 | 照常隐藏（`MonitorSet::NoOutputs` 分支）；输出恢复后在队列里，可用 `scratchpad-show` 呈现。无输出时没有 `output`，映射路径不重绘 | 与 M2a 用例 13 一致 |
+| 已隐藏/拖动中/有子窗口 | 新窗口不可能遇到；`scratchpad_hide` 仍做这些检查，失败时窗口保持普通 | |
+| `at-startup` | 可与 `open-in-scratchpad` 组合 | |
+| 源工作区是活动且为末尾的空工作区 | 添加时 `ensure_empty_workspaces_after_add` 会追加一个空工作区，隐藏后活动工作区为空但不会被清理（活动不清理）。结果与“在末尾空工作区开窗再关掉”相同：多出一个空工作区，切走后被清理。**已知限制**，用例 L5 固定其行为（P14） | 避免为此给清理逻辑加特例 |
+| 其他列的视图 | 添加（`ActivateWindow::No`，不动视图）再移除，同一时刻内发生，列位置的移动动画互相抵消；功能一开启时 `fill_view_after_removal()` 只会把本来就越界的视图收紧，已收紧时无动作。用例 L1/L6 断言其他窗口位置与加入前一致 | |
+
+**与 M5b 的关系**：不创建收起记录（G10、`animate = false`）。呈现时 `scratchpad_show` 照常 `start_open_animation_from(0)`，隐藏期间无动画，窗口第一次出现时播放普通开窗动画。
+
+### 10.5 再映射保留身份（D11 改写）
+
+**D11 新版**（M6 完成时改写 §2 表）：取消映射即退出暂存区；若取消映射前窗口在暂存区（Hidden 或 Shown），Unmapped 记住这一点，再映射时窗口作为 Shown 呈现在当前活动显示器的活动工作区。
+
+- **数据**：`Unmapped` 加 `pub was_in_scratchpad: bool`（`Unmapped::new` 初始为 false）。取消映射处 `Unmapped::new(window)` 之后赋值：`mapped.scratchpad_state() != ScratchpadState::None`（在 `layout.remove_window` 之前读出，G7）。生命周期：随 `Unmapped` 存在，映射时被解构消费；toplevel 销毁时随 Unmapped 一起丢弃，没有额外清理。初始 configure（NotConfigured → Configured）不读写它。
+- **规则输入**：`Unmapped` 的 `is-in-scratchpad` 恒为 false（§10.3），不因 `was_in_scratchpad` 而变；因此不能用 `is-in-scratchpad` 为再映射窗口指定开窗属性（与 `is-floating` 一致）。
+- **映射时的决定**（`compositor.rs`），`parent.is_none()` 才考虑，设 `r = rules.open_in_scratchpad`：
+
+  | `was_in_scratchpad` | `r` | 结果 |
+  |---|---|---|
+  | false | `Some(true)` | Hidden |
+  | false | `Some(false)` / `None` | 普通窗口 |
+  | true | `Some(false)` | 普通窗口（显式退出） |
+  | true | `Some(true)` / `None` | **Shown**（优先于规则，P10） |
+
+  Shown 的激活：`!matches!(activate, ActivateWindow::No)`（沿用 D10 的写法）。这样托盘“显示窗口”（xdg-activation 令牌 → `Yes`）会聚焦它，`open-focused false` 与严格焦点策略下不抢焦点。
+- **落点**：`move_new_window_to_scratchpad(&window, Some(activate))`：先 `scratchpad_hide(.., false)`，再 `scratchpad_show(.., activate)`。复用隐藏时的 D12 与浮动位置逻辑，窗口以普通开窗动画出现在当前工作区的浮动层（映射路径随后的 `start_open_animation_for_window` 会把同一动画重新从 0 开始，同一时刻，无可见差异）。映射路径随后的 `new_focus == Some(&window)` 判断照常触发光标移动。
+- **无输出**：`scratchpad_show` 失败，窗口保持 Hidden，输出恢复后用 `scratchpad-show` 呈现（P13）。
+- **不做**：不记录再映射前的位置/尺寸（新映射走 D12 的首次尺寸）；不为 `was_in_scratchpad` 设置过期。
+
+### 10.6 IPC
+
+- 不需要改 niri-ipc。事件流里首次映射即隐藏的窗口，第一条 `WindowOpenedOrChanged` 就是 `is_in_scratchpad = true, is_scratchpad_hidden = true, workspace_id = None, is_focused = false`；不会出现“平铺 → 隐藏”的中间状态（G12：`ipc_refresh_windows` 在整个映射处理结束后才运行）。再映射呈现的窗口第一条事件就是 Shown（`workspace_id` 有值）。窗口 id 在再映射时是新的（`Mapped::new`），旧 id 照常发 `WindowClosed`。
+- 工作区事件：见 §10.4.3 的空工作区限制，可能多出一个空工作区的 `WorkspacesChanged`。
+
+### 10.7 不变量
+
+不新增 `verify_invariants()` 断言；`move_new_window_to_scratchpad` 在 `animate = false` 下维持现有不变量 1–6 与 M5b 记录不变量（没有记录）。测试里每个 Op 之后照常检查。额外的行为约束（用例覆盖）：
+
+1. 新窗口隐藏后 `windows_with_hiding_records == 0`，`are_animations_ongoing()` 与加入前一致。
+2. 加入 + 隐藏之后，其余窗口的渲染位置与加入前一致，焦点窗口、活动显示器不变（`activate = No`）。
+3. 规则重算不改变 `scratchpad_state()`（C3）。
+4. `scratchpad_state() == Shown` 的再映射窗口位于活动显示器的活动工作区浮动层（现有不变量 3、4）。
+
+### 10.8 测试用例
+
+期望值在写测试时先手算；下表给出判据。
+
+**布局层**（`src/layout/tests/scratchpad.rs`；`Op` 新增 `AddWindowToScratchpad { params, show: Option<bool> }`，处理同 `AddWindow`（含重复 id 检查），之后调用 `move_new_window_to_scratchpad`，参与随机生成）：
+
+| # | 场景 | 断言 |
+|---|---|---|
+| L1 | 已有两个平铺窗口，`AddWindow(activate=No)` + `move_new_window_to_scratchpad(None)` | 状态 Hidden，队列长度 1；无收起记录；`are_animations_ongoing()` 与加入前相同（不含新列）；原两个窗口的位置、焦点与加入前逐项相等 |
+| L2 | 对照：同样的新窗口用公开的 `move_to_scratchpad`（`animate = true`）隐藏 | 产生收起记录且 v0 = 1（说明新入口为什么必须 `animate = false`，也防止以后有人把两者合并） |
+| L3 | `show = Some(true)` / `Some(false)` / 无输出 | `Some(true)`：Shown、浮动层、聚焦；`Some(false)`：Shown、不聚焦、焦点窗口不变；无输出：Hidden 且队列里有它，再 `add_output` 后 `ToggleScratchpad` 能呈现 |
+| L4 | 浮动打开（`is_floating = true`）+ 隐藏，再 `ScratchpadShow` | 位置与尺寸与打开时一致，不走 D12 |
+| L5 | 只有一个空工作区时新窗口隐藏 | 两个工作区（活动的空工作区 + 末尾空工作区），不变量成立；再切到另一个工作区后被清理为一个 |
+| L6 | `fill_view_after_removal` 开/关各一遍：视图在末端时新窗口隐藏 | 视图位置与加入前相等 |
+| L7 | 两个显示器，`target = Output(第二个)`，`activate = No` + 隐藏 | 活动显示器不变、焦点不变；第二个显示器工作区列表不变（扣除 L5 的限制） |
+| L8 | `ActivateWindow::Yes` 对照：不经新入口直接 add 再 hide | 活动显示器已切到第二个（说明为什么要传 `No`） |
+| L9 | 随机测试（`random_operations_dont_panic`） | 不变量成立；临时插桩统计新入口命中 |
+
+**客户端集成测试**（`src/tests/scratchpad.rs`，带 `Fixture::with_config(Config::parse_mem(..))`；测试客户端补 `set_app_id`，随首个使用它的测试提交）：
+
+| # | 场景 | 断言 |
+|---|---|---|
+| C1 | `match app-id="^dd$"` + `open-in-scratchpad true`：映射该窗口与一个无关窗口 | 前者 Hidden、无输出归属、未聚焦；后者普通且保留焦点；无 ERROR；配置序列：初始 configure 后不再有 Activated；`ipc_windows_from_events_and_layout()` 的 JSON 一致，且事件流第一条就是隐藏状态 |
+| C2 | C1 的窗口 `scratchpad-show` | 平铺打开时：请求 1152×648（60%，同 M3 用例）；`open-floating true` + `default-column-width { fixed 400; }` + `default-floating-position x=20 y=30`：呈现的位置 (20, 30)、尺寸等于打开时提交的尺寸 |
+| C3 | 不振荡：规则 `app-id → open-in-scratchpad true`、`is-in-scratchpad=true → open-in-scratchpad false`、`is-in-scratchpad=false → open-in-scratchpad true`；映射 → 隐藏 → 呈现 → `remove-window-from-scratchpad` → 隐藏 | 每一步之后跑 `refresh`，`scratchpad_state()` 恰为动作结果，不自行翻转；`rules().open_in_scratchpad` 随状态变化（证明重算确实发生过） |
+| C4 | `is-in-scratchpad=true` 的规则（如 `opacity 0.5`） | Hidden、Shown 时 `rules().opacity == Some(0.5)`，None 时为 None；映射前（Unmapped）不匹配 |
+| C5 | 带 parent 的窗口匹配 `open-in-scratchpad true` | 保持普通窗口，不隐藏 |
+| C6 | 再映射：Hidden 取消映射后再映射 | 新窗口 Shown、浮动、在当前工作区、聚焦（令牌/Smart）；`open-focused false` 时不聚焦；IPC 一致 |
+| C7 | 再映射：Shown、普通窗口各一次 | Shown → Shown；普通 → 普通（D11 旧用例 `unmap_hidden_window` 的第二段期望值随之改变，是预期变化，提交说明写明） |
+| C8 | 再映射 + 规则 | `was=true, r=Some(true)` → Shown；`was=true, r=Some(false)` → 普通；`was=false, r=Some(true)` → Hidden |
+| C9 | 无输出时再映射/规则隐藏 | Hidden 且在队列里；加输出后 `scratchpad-show` 呈现 |
+| C10 | 无 ERROR 日志（`ErrorCollector`）、无 panic，贯穿以上用例 | |
+
+**反向验证**（先提交再做）：去掉 `ActivateWindow::No`（L7/L8、C1 失败）；`animate=false` 改回 true（L1/L3、C1 失败）；钩子中 `parent.is_none()` 条件（C5）；`is_in_scratchpad` 匹配（C4）；`was_in_scratchpad` 的赋值（C6）；Shown 优先于规则（C8）；`Some(false)` 退出（C8）；无输出分支（C9）。多个子场景的用例用 `INSTA_FORCE_PASS=1` 逐个确认。
+
+**嵌套 niri 冒烟测试**：`animations { slowdown 10; }`，ghostty `--gtk-single-instance=false --class=com.test.xxx` 配合 `open-in-scratchpad` 规则：映射即隐藏（连续截图确认无闪现）；`scratchpad-show --app-id` 呈现的位置与尺寸；用 `is-in-scratchpad` 规则改 border/opacity，截图对比 Shown 与普通状态。再映射需要客户端主动取消映射，嵌套里无法驱动，由 C6–C9 覆盖。
+
+### 10.9 提交拆分
+
+| 步 | 提交 | 验收 |
+|---|---|---|
+| M6-1 | `config: Add is-in-scratchpad matcher and open-in-scratchpad rule`（niri-config、`ResolvedWindowRules`、`WindowRef::is_in_scratchpad`、`window_matches`、更新解析快照） | 编译；现有测试仅内联快照多出 `None` 行 |
+| M6-2 | `layout: Add move_new_window_to_scratchpad`（提取 `scratchpad_hide(animate)`；新入口；Op 与随机测试接入） | M5b 全部用例不变；clippy 无未使用警告（入口随下一提交被使用，本提交临时 `#[allow(dead_code)]` 并在下一提交移除，同 M2a 做法） |
+| M6-3 | `window: Open windows in the scratchpad per window rule`（映射钩子、`ActivateWindow::No`、副作用入口） | |
+| M6-4 | `layout: Test open-in-scratchpad` + `tests: Test scratchpad window rules`（布局 + 客户端，含 `set_app_id`） | §10.8 全过；反向验证 |
+| M6-5 | `window: Keep the scratchpad state of unmapped windows`（`was_in_scratchpad`、映射时 Shown；更新 D11 旧用例） | |
+| M6-6 | 再映射测试 | C6–C9 |
+| M6-7 | `wiki: Document scratchpad window rules` | `wiki-parses` |
+| 文档 | §2 D11 改写、§6.1 进度、§10 补充说明（单独提交，中文） | |
+
+每步：编译 → 相关测试 → `cargo +nightly fmt --all` → `cargo clippy --workspace --all-targets` → 单独提交。随机测试每步之后前台多轮（`RUN_SLOW_TESTS=1 PROPTEST_CASES=5000 cargo test --release --lib random_operations_dont_panic`）。
+
+### 10.10 待定取舍
+
+| # | 问题 | 推荐 | 理由 | 备选 |
+|---|---|---|---|---|
+| P9 | 带 parent 的新窗口遇到 `open-in-scratchpad true` | **忽略规则**（`debug!`），按普通对话框 | 与 D10 一致：不隐藏模态对话框；父窗口隐藏时 D10 要先呈现父窗口，再隐藏子窗口自相矛盾 | 照常隐藏（用户明确要求时能隐藏，但可能让程序看似卡死） |
+| P10 | 再映射窗口同时满足 `was_in_scratchpad` 与 `open-in-scratchpad true` | **Shown 优先**；`open-in-scratchpad false` 作为显式退出（不保留身份） | 托盘“显示窗口”必须有反应（§8）；规则“进暂存区”的意图由 Shown 同样满足；`false` 给用户一个关闭保留的开关 | 规则优先（会隐藏，托盘点击无反应）；或再映射不看规则 |
+| P11 | 是否在 M6 做再映射保留身份（§8 标为可选） | **做**，放在 M6-5/6，独立提交 | 约 20 行生产代码；与规则同属“窗口进出暂存区”；做完后 D11 的“不保留”限制消除（KeePassXC 等托盘程序的真实用例） | 不做，D11 保持 v1 行为 |
+| P12 | `open-in-scratchpad` 是否隐含 `open-floating` | **不隐含** | 可组合、行为可预测；D12 已为平铺打开的窗口兜底；示例配置里并列写出即可 | 隐含：初始 configure 直接用浮动尺寸，省一次呈现时的 resize，但规则间产生耦合、`open-floating false` 的语义变复杂 |
+| P13 | 再映射 Shown 遇到无输出 | **退化为 Hidden** | 无输出时无处可呈现；输出恢复后 `scratchpad-show` 可呈现；不引入新状态 | 保持普通窗口（留在 NoOutputs 工作区，退出暂存区） |
+| P14 | 新窗口隐藏后，活动末尾空工作区多出一个空工作区 | **接受为已知限制**，用 L5 固定行为并写入 wiki | 与“在末尾空工作区开窗再关窗”相同，切走后自动清理；特例化需要改清理逻辑，收益小、风险大 | 隐藏后若活动工作区为空且下一个是末尾空工作区，则移除末尾那个（需要新增“可回收”标记或判断，容易与 `empty-workspace-above-first` 冲突） |
+
+另有两个已在正文按推荐项处理、认为不需要用户拍板的点（有异议请提出）：新窗口隐藏**不创建收起记录**（G10，否则会出现从未渲染过的窗口的收起动画，不是取舍而是正确性要求）；`is-in-scratchpad` 对 Unmapped 恒为 false（与 `is-floating` 的 FIXME 一致，避免与 `open-in-scratchpad` 成环）。
