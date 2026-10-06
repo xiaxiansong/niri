@@ -784,3 +784,38 @@ window-rule {
     "
     );
 }
+
+#[test]
+fn open_in_scratchpad_does_not_activate_output() {
+    let mut f = Fixture::with_config(
+        Config::parse_mem(
+            r#"
+window-rule {
+    match app-id="^dd$"
+    open-in-scratchpad true
+    open-on-output "headless-2"
+    open-focused true
+}
+"#,
+        )
+        .unwrap(),
+    );
+    f.add_output(1, (1920, 1080));
+    f.add_output(2, (1920, 1080));
+    f.niri_focus_output(1);
+    let id = f.add_client();
+    map_window(&mut f, id, "other", None);
+
+    // The window is added on output 2, but hiding it must leave the focus and the active output
+    // where they were.
+    map_window_with_app_id(&mut f, id, "dd", Some("dd"), None);
+    assert_snapshot!(
+        format_windows(&mut f),
+        @r"
+    dd: Hidden, floating: true, workspace: false, focused: false
+    other: None, floating: false, workspace: true, focused: true
+    "
+    );
+    let output = f.niri().layout.active_output().unwrap().name();
+    assert_eq!(output, "headless-1");
+}
