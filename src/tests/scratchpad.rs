@@ -819,3 +819,214 @@ window-rule {
     let output = f.niri().layout.active_output().unwrap().name();
     assert_eq!(output, "headless-1");
 }
+
+/// Unmaps the window and maps it again, like an application hiding to the tray and coming back.
+///
+/// Unmapping discards the toplevel attributes, so they are set again.
+fn remap(f: &mut Fixture, id: ClientId, surface: &WlSurface, title: &str, app_id: &str) {
+    let window = f.client(id).window(surface);
+    window.attach_null();
+    window.commit();
+    f.double_roundtrip(id);
+
+    let window = f.client(id).window(surface);
+    window.set_title(title);
+    window.set_app_id(app_id);
+    window.commit();
+    f.roundtrip(id);
+    let window = f.client(id).window(surface);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+}
+
+fn do_action(f: &mut Fixture, id: ClientId, action: Action) {
+    f.niri_state().do_action(action, false);
+    f.double_roundtrip(id);
+}
+
+#[test]
+fn remapped_window_is_shown_in_scratchpad() {
+    let (errors, _guard) = ErrorCollector::install();
+    let (mut f, id) = set_up();
+    map_window(&mut f, id, "other", None);
+    let surface = map_window(&mut f, id, "a", None);
+
+    // A hidden window comes back shown, on the workspace that is active now.
+    do_action(&mut f, id, Action::MoveWindowToScratchpad);
+    do_action(&mut f, id, Action::FocusWorkspaceDown);
+    f.niri_complete_animations();
+    remap(&mut f, id, &surface, "a", "");
+    assert_snapshot!(
+        format_windows(&mut f),
+        @r"
+    a: Shown, floating: true, workspace: true, focused: true
+    other: None, floating: false, workspace: true, focused: false
+    "
+    );
+    assert!(is_on_active_workspace(&mut f, "a"));
+    assert_snapshot!(
+        check_ipc_all(&mut f),
+        @"a: in scratchpad: true, hidden: false, workspace: true; other: in scratchpad: false, hidden: false, workspace: true"
+    );
+
+    // So does a shown one.
+    remap(&mut f, id, &surface, "a", "");
+    assert_snapshot!(
+        format_windows(&mut f),
+        @r"
+    a: Shown, floating: true, workspace: true, focused: true
+    other: None, floating: false, workspace: true, focused: false
+    "
+    );
+
+    // A regular window stays regular.
+    do_action(&mut f, id, Action::RemoveWindowFromScratchpad);
+    remap(&mut f, id, &surface, "a", "");
+    assert_snapshot!(
+        format_windows(&mut f),
+        @r"
+    a: None, floating: false, workspace: true, focused: true
+    other: None, floating: false, workspace: true, focused: false
+    "
+    );
+
+    assert_eq!(errors.errors(), Vec::<String>::new());
+}
+
+fn check_ipc_all(f: &mut Fixture) -> String {
+    let (from_events, from_layout) = f.niri_state().ipc_windows_from_events_and_layout();
+    assert_eq!(
+        serde_json::to_value(&from_events).unwrap(),
+        serde_json::to_value(&from_layout).unwrap(),
+    );
+
+    let mut windows: Vec<_> = from_events
+        .iter()
+        .map(|win| {
+            format!(
+                "{}: in scratchpad: {}, hidden: {}, workspace: {}",
+                win.title.as_deref().unwrap(),
+                win.is_in_scratchpad,
+                win.is_scratchpad_hidden,
+                win.workspace_id.is_some(),
+            )
+        })
+        .collect();
+    windows.sort();
+    windows.join("; ")
+}
+
+#[test]
+fn remapped_window_respects_open_focused() {
+    let (mut f, id) = set_up_with_config(
+        r#"
+window-rule {
+    match app-id="^dd$"
+    open-focused false
+}
+"#,
+    );
+    map_window(&mut f, id, "other", None);
+    let surface = map_window_with_app_id(&mut f, id, "a", Some("dd"), None);
+    let a = window_id(&mut f, "a");
+    do_action(&mut f, id, Action::MoveWindowToScratchpadById(a));
+
+    remap(&mut f, id, &surface, "a", "dd");
+    assert_snapshot!(
+        format_windows(&mut f),
+        @r"
+    a: Shown, floating: true, workspace: true, focused: false
+    other: None, floating: false, workspace: true, focused: true
+    "
+    );
+}
+
+#[test]
+fn remapped_window_and_open_in_scratchpad_rule() {
+    // dd: the rule hides new windows. nd: the rule opts out.
+    let (mut f, id) = set_up_with_config(
+        r#"
+window-rule {
+    match app-id="^dd$"
+    open-in-scratchpad true
+}
+window-rule {
+    match app-id="^nd$"
+    open-in-scratchpad false
+}
+"#,
+    );
+    let dd = map_window_with_app_id(&mut f, id, "dd", Some("dd"), None);
+    let nd = map_window_with_app_id(&mut f, id, "nd", Some("nd"), None);
+    do_action(&mut f, id, Action::MoveWindowToScratchpad);
+    assert_snapshot!(
+        format_windows(&mut f),
+        @r"
+    dd: Hidden, floating: true, workspace: false, focused: false
+    nd: Hidden, floating: true, workspace: false, focused: false
+    "
+    );
+
+    // In the scratchpad before: shown, even though the rule hides, unless the rule says no.
+    remap(&mut f, id, &dd, "dd", "dd");
+    remap(&mut f, id, &nd, "nd", "nd");
+    assert_snapshot!(
+        format_windows(&mut f),
+        @r"
+    dd: Shown, floating: true, workspace: true, focused: false
+    nd: None, floating: false, workspace: true, focused: true
+    "
+    );
+
+    // Not in the scratchpad before: the rule applies as for a new window.
+    let dd_id = window_id(&mut f, "dd");
+    do_action(&mut f, id, Action::RemoveWindowFromScratchpadById(dd_id));
+    remap(&mut f, id, &dd, "dd", "dd");
+    assert_snapshot!(
+        format_windows(&mut f),
+        @r"
+    dd: Hidden, floating: true, workspace: false, focused: false
+    nd: None, floating: false, workspace: true, focused: true
+    "
+    );
+}
+
+#[test]
+fn remapped_window_without_outputs_stays_hidden() {
+    let (errors, _guard) = ErrorCollector::install();
+    let (mut f, id) = set_up();
+    let surface = map_window(&mut f, id, "a", None);
+    do_action(&mut f, id, Action::MoveWindowToScratchpad);
+
+    let window = f.client(id).window(&surface);
+    window.attach_null();
+    window.commit();
+    f.double_roundtrip(id);
+
+    let output = f.niri_output(1);
+    f.niri().remove_output(&output);
+
+    let window = f.client(id).window(&surface);
+    window.set_title("a");
+    window.commit();
+    f.roundtrip(id);
+    let window = f.client(id).window(&surface);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+    assert_snapshot!(
+        format_windows(&mut f),
+        @"a: Hidden, floating: true, workspace: false, focused: false"
+    );
+
+    // It can be shown once there is an output again.
+    f.add_output(1, (1920, 1080));
+    do_action(&mut f, id, Action::ScratchpadShow(None));
+    assert_snapshot!(
+        format_windows(&mut f),
+        @"a: Shown, floating: true, workspace: true, focused: true"
+    );
+
+    assert_eq!(errors.errors(), Vec::<String>::new());
+}
