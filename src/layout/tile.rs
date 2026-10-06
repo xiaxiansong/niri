@@ -585,9 +585,14 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn start_open_animation(&mut self) {
+        self.start_open_animation_from(0.);
+    }
+
+    /// Starts the open animation from the given progress, like when interrupting its reverse.
+    pub fn start_open_animation_from(&mut self, from: f64) {
         self.open_animation = Some(OpenAnimation::new(Animation::new(
             self.clock.clone(),
-            0.,
+            from,
             1.,
             0.,
             self.options.animations.window_open.anim,

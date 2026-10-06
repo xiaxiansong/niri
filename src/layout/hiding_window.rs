@@ -53,6 +53,11 @@ impl<Id> HidingWindow<Id> {
         self.anim.is_done()
     }
 
+    /// Returns the current progress of the animation, from 1 (shown) to 0 (hidden).
+    pub fn progress(&self) -> f64 {
+        self.anim.clamped_value()
+    }
+
     pub fn pos(&self) -> Point<f64, Logical> {
         self.pos
     }

@@ -3791,14 +3791,21 @@ impl<W: LayoutElement> Layout<W> {
         };
         let mut tile = self.scratchpad.hidden.remove(idx).unwrap();
 
-        // At most one of hiding and showing animates at a time.
+        // At most one of hiding and showing animates at a time. If the window is still animating
+        // out, continue from there.
+        let mut from = 0.;
         for ws in monitors
             .iter_mut()
             .flat_map(|mon| mon.workspaces.iter_mut())
         {
-            ws.remove_scratchpad_hiding(window);
+            if let Some(hiding) = ws.remove_scratchpad_hiding(window) {
+                if Some(hiding.gen) == tile.scratchpad_hide_gen {
+                    from = hiding.progress();
+                }
+            }
         }
         tile.scratchpad_hide_gen = None;
+        tile.start_open_animation_from(from);
 
         set_tile_scratchpad(&mut tile, ScratchpadState::Shown);
         tile.scratchpad_shown_seq = self.scratchpad.next_seq;
@@ -3808,7 +3815,6 @@ impl<W: LayoutElement> Layout<W> {
         let ws_idx = mon.active_workspace_idx;
         let ws = &mut mon.workspaces[ws_idx];
         ws.add_scratchpad_tile(tile, activate, true);
-        ws.start_open_animation(window);
         mon.ensure_empty_workspaces_after_add(ws_idx);
 
         true
@@ -3932,6 +3938,7 @@ impl<W: LayoutElement> Layout<W> {
         // Count this as showing the window.
         tile.scratchpad_shown_seq = self.scratchpad.next_seq;
         self.scratchpad.next_seq += 1;
+        tile.start_open_animation();
 
         let mon = &mut monitors[*active_monitor_idx];
         let ws_idx = mon.active_workspace_idx;
