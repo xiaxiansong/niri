@@ -1141,7 +1141,7 @@ pub struct HidingWindow<Id> {
 - 存放：`Workspace.scratchpad_hiding: Vec<HidingWindow<W::Id>>`，在 `Workspace::render_floating()` 的 Normal 层最先画（在浮动 Tile 之上，同关窗动画）；按 `RenderTarget` 选普通/屏蔽内容（同 `ClosingWindow`）。无快照时不画。
 - 隐藏队列中的 Tile 新增 `scratchpad_hide_gen: Option<u64>`。
 
-**创建**（`Layout::move_to_scratchpad`，`remove_tile` 之前取位置与尺寸）：源工作区是其显示器的活动工作区、有输出、window-open 未关闭时创建；`v0` = Tile 正在进行的开窗动画进度（`clamped_value`），否则 1。按 `--id` 隐藏非活动工作区上的窗口、无输出时都不创建。
+**创建**（`Layout::move_to_scratchpad`，`remove_tile` 之前取位置与尺寸）：源工作区是其显示器的活动工作区、有输出、window-open 未关闭、且 Tile 当时可见（`Workspace::tiles_with_render_positions()` 的 `visible` 标志：排除标签页列中的非活动标签页、被聚焦的全屏窗口挡住的浮动窗口；M5b-2 实现时发现，经用户同意补入）时创建；`v0` = Tile 正在进行的开窗动画进度（`clamped_value`），否则 1。按 `--id` 隐藏非活动工作区上的窗口、无输出时都不创建。
 
 **快照**：布局层不碰 GPU。niri 层 `State::on_window_hidden_to_scratchpad()` 新增第 0 步（在清可见性缓存、关闭弹出菜单之前）：`output` 取自新增的 `Layout::hiding_window_output(&W::Id) -> Option<&Output>`（在各显示器的工作区中按 id 找记录；`find_window_and_output()` 对隐藏窗口返回的输出为 None，不能用）；有输出时调用现有 `State::store_unmap_snapshot(window, Some(output))`，没有记录则跳过本步。`Layout::store_unmap_snapshot()` 增加分支：窗口是隐藏窗口且有无快照的记录时，在 `workspaces_with_render_geo_mut(false)` 中找到记录所在工作区，对隐藏 Tile 先 `update_render_elements(false, Rectangle::new(-record.pos, ws.view_size()))`（与 `Workspace::store_unmap_snapshot_if_empty()` 一致），再用 `render_snapshot()`（改为 `pub(super)`）以 `XrayPos::new(geo.loc, zoom).offset(record.pos)` 生成快照填入记录。
 
@@ -1167,7 +1167,7 @@ pub struct HidingWindow<Id> {
 | # | 场景 | 断言 |
 |---|---|---|
 | 1 | 活动工作区隐藏 | 产生一条记录，v0 = 1 |
-| 2 | `--id` 隐藏非活动工作区窗口；window-open off；无输出 | 无记录 |
+| 2 | `--id` 隐藏非活动工作区窗口；window-open off；无输出；`--id` 隐藏非活动标签页、被全屏挡住的浮动窗口 | 无记录 |
 | 3 | 收起中呈现 | 记录被删；开窗动画从记录当前 v 开始 |
 | 4 | 开窗动画中隐藏 | 记录 v0 = 当时开窗进度 |
 | 5 | 收起中关窗、移除输出、工作区被清理、`move-workspace-to-monitor` | 无残留记录 |
