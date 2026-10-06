@@ -19,7 +19,7 @@ use smithay::wayland::shm::{ShmHandler, ShmState};
 
 use super::xdg_shell::add_mapped_toplevel_pre_commit_hook;
 use crate::handlers::XDG_ACTIVATION_TOKEN_TIMEOUT;
-use crate::layout::{ActivateWindow, AddWindowTarget, LayoutElement as _};
+use crate::layout::{ActivateWindow, AddWindowTarget, LayoutElement as _, ScratchpadState};
 use crate::niri::{CastTarget, ClientState, LockState, State};
 use crate::utils::transaction::Transaction;
 use crate::utils::{is_mapped, send_scale_transform};
@@ -84,6 +84,7 @@ impl CompositorHandler for State {
                         window,
                         state,
                         activation_token_data,
+                        was_in_scratchpad,
                     } = entry.remove();
 
                     window.on_commit();
@@ -191,13 +192,24 @@ impl CompositorHandler for State {
                         })
                         .map(|(mapped, _)| mapped.window.clone());
 
-                    // Windows with a parent are dialogs, which we don't hide on their own.
+                    // Windows with a parent are dialogs, which we don't move to the scratchpad on
+                    // their own.
                     //
                     // `None` means not in the scratchpad, `Some(None)` hidden,
                     // `Some(Some(activate))` shown.
-                    let scratchpad: Option<Option<bool>> = (parent.is_none()
-                        && rules.open_in_scratchpad == Some(true))
-                    .then_some(None);
+                    let scratchpad: Option<Option<bool>> = if parent.is_some() {
+                        None
+                    } else {
+                        match (was_in_scratchpad, rules.open_in_scratchpad) {
+                            // An explicit false opts out of everything.
+                            (_, Some(false)) => None,
+                            // A window that was in the scratchpad before is shown again, even if
+                            // the rule would hide it, so that "show window" from a tray works.
+                            (true, _) => Some(Some(!matches!(activate, ActivateWindow::No))),
+                            (false, Some(true)) => Some(None),
+                            (false, None) => None,
+                        }
+                    };
 
                     // The mapped pre-commit hook deals with dma-bufs on its own.
                     self.remove_default_dmabuf_pre_commit_hook(surface);
@@ -289,6 +301,7 @@ impl CompositorHandler for State {
                 let output = output.cloned();
 
                 let id = mapped.id();
+                let was_in_scratchpad = mapped.scratchpad_state() != ScratchpadState::None;
 
                 // This is a commit of a previously-mapped toplevel.
                 let is_mapped = is_mapped(surface);
@@ -334,7 +347,8 @@ impl CompositorHandler for State {
 
                     // Newly-unmapped toplevels must perform the initial commit-configure sequence
                     // afresh.
-                    let unmapped = Unmapped::new(window);
+                    let mut unmapped = Unmapped::new(window);
+                    unmapped.was_in_scratchpad = was_in_scratchpad;
                     self.niri.unmapped_windows.insert(surface.clone(), unmapped);
 
                     if let Some(output) = output {

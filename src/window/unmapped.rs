@@ -12,6 +12,10 @@ pub struct Unmapped {
     pub state: InitialConfigureState,
     /// Activation token, if one was used on this unmapped window.
     pub activation_token_data: Option<XdgActivationTokenData>,
+    /// Whether the window was in the scratchpad when it last unmapped.
+    ///
+    /// Such a window is shown in the scratchpad again when it maps.
+    pub was_in_scratchpad: bool,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -87,6 +91,7 @@ impl Unmapped {
                 wants_maximized: false,
             },
             activation_token_data: None,
+            was_in_scratchpad: false,
         }
     }
 

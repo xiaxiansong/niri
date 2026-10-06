@@ -205,8 +205,8 @@ fn unmap_hidden_window() {
     assert_snapshot!(format_windows(&mut f), @"");
     assert_eq!(f.niri().layout.scratchpad_hidden_windows().count(), 0);
 
-    // Mapping again gives a regular window. Unmapping discards the toplevel attributes, so
-    // set the title again.
+    // Mapping again shows the window in the scratchpad. Unmapping discards the toplevel
+    // attributes, so set the title again.
     let window = f.client(id).window(&surface);
     window.set_title("a");
     window.commit();
@@ -218,7 +218,7 @@ fn unmap_hidden_window() {
 
     assert_snapshot!(
         format_windows(&mut f),
-        @"a: None, floating: false, workspace: true, focused: true"
+        @"a: Shown, floating: true, workspace: true, focused: true"
     );
 
     assert_eq!(errors.errors(), Vec::<String>::new());
