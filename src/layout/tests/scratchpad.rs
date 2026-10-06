@@ -1724,3 +1724,167 @@ fn shown_window_brought_over_animates() {
     check_ops_on_layout(&mut layout, [advance(25)]);
     assert_snapshot!(open_progress(&layout, 2), @"0.25");
 }
+
+fn add_hidden(id: usize, show: Option<bool>) -> Op {
+    Op::AddWindowToScratchpad {
+        params: TestWindowParams::new(id),
+        show,
+    }
+}
+
+/// Render positions of the tiles on the active workspace.
+fn positions(layout: &Layout<TestWindow>) -> String {
+    let ws = layout.active_workspace().unwrap();
+    let mut tiles: Vec<_> = ws
+        .tiles_with_render_positions()
+        .map(|(tile, pos, _)| format!("{}: {},{}", tile.window().0.id, pos.x, pos.y))
+        .collect();
+    tiles.sort();
+    tiles.join("; ")
+}
+
+#[test]
+fn new_window_hides_without_trace() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1, 100),
+        window(2, 100),
+        Op::CompleteAnimations,
+    ]);
+    let before = positions(&layout);
+    // Columns at x = 16 and 16 + 100 + 16, below the 16 px gap.
+    assert_snapshot!(before, @"1: 16,16; 2: 132,16");
+    assert!(!layout.are_animations_ongoing(None));
+
+    check_ops_on_layout(&mut layout, [add_hidden(3, None)]);
+    assert_snapshot!(summary(&layout), @"hidden: [3], shown: [], focus: Some(2)");
+    assert_eq!(state(&layout, 3), ScratchpadState::Hidden);
+
+    // The window was never visible, so there is nothing to animate out, and the others stay put.
+    assert_eq!(hiding(&layout), "");
+    assert!(layout.hiding_window_output(&3).is_none());
+    assert_eq!(positions(&layout), before);
+    assert!(!layout.are_animations_ongoing(None));
+
+    // Contrast: hiding a window that is just as new through the regular path animates it out.
+    check_ops_on_layout(&mut layout, [window(4, 100), hide(4)]);
+    assert_snapshot!(hiding(&layout), @"4 gen 0 at 1.00");
+}
+
+#[test]
+fn new_window_shown_in_scratchpad() {
+    let layout = check_ops([Op::AddOutput(1), window(1, 100), add_hidden(2, Some(true))]);
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
+    assert!(layout.active_workspace().unwrap().is_floating(&2));
+    assert_eq!(hiding(&layout), "");
+
+    let layout = check_ops([Op::AddOutput(1), window(1, 100), add_hidden(2, Some(false))]);
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(1)");
+    assert!(layout.active_workspace().unwrap().is_floating(&2));
+
+    // Without outputs, the window stays hidden until there is somewhere to show it.
+    let mut layout = check_ops([add_hidden(1, Some(true))]);
+    assert_snapshot!(summary(&layout), @"hidden: [1], shown: [], focus: None");
+    check_ops_on_layout(&mut layout, [Op::AddOutput(1), toggle()]);
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [1], focus: Some(1)");
+}
+
+#[test]
+fn new_floating_window_keeps_geometry_in_scratchpad() {
+    let mut params = TestWindowParams::new(2);
+    params.is_floating = true;
+
+    let reference = check_ops([
+        Op::AddOutput(1),
+        window(1, 100),
+        Op::AddWindow {
+            params: params.clone(),
+        },
+        Op::Communicate(2),
+        Op::CompleteAnimations,
+    ]);
+    let before = floating_geometry(&reference, 2);
+    assert_snapshot!(before, @"pos: 590 260, size: 100 200");
+
+    let layout = check_ops([
+        Op::AddOutput(1),
+        window(1, 100),
+        Op::AddWindowToScratchpad { params, show: None },
+        toggle(),
+        Op::Communicate(2),
+        Op::CompleteAnimations,
+    ]);
+    assert_eq!(floating_geometry(&layout, 2), before);
+}
+
+#[test]
+fn new_window_hidden_on_empty_workspace() {
+    // Like opening and closing a window on the last workspace: the new empty workspace stays
+    // until the active one is left.
+    let mut layout = check_ops([Op::AddOutput(1), add_hidden(1, None)]);
+    assert_snapshot!(workspaces(&layout), @"output1: *[] []");
+
+    // The empty workspace is cleaned up once the switch animation is over.
+    check_ops_on_layout(&mut layout, [Op::FocusWorkspaceDown]);
+    assert_snapshot!(workspaces(&layout), @"output1: [] *[]");
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_snapshot!(workspaces(&layout), @"output1: *[]");
+}
+
+#[test]
+fn new_window_hides_without_moving_view() {
+    // Four columns with the view at the right end, as in the first-show test.
+    let setup = [
+        Op::AddOutput(1),
+        window(1, 500),
+        window(2, 500),
+        window(3, 500),
+        window(4, 500),
+        Op::FocusColumnFirst,
+        Op::FocusColumnLast,
+        Op::CompleteAnimations,
+    ];
+    let mut with_hidden = setup.to_vec();
+    with_hidden.push(add_hidden(5, None));
+
+    assert_snapshot!(off_on(&setup), @"off: 784, on: 784");
+    assert_eq!(off_on(&with_hidden), off_on(&setup));
+}
+
+#[test]
+fn new_window_in_scratchpad_does_not_activate_output() {
+    let setup = || {
+        check_ops([
+            Op::AddOutput(1),
+            Op::AddOutput(2),
+            Op::FocusOutput(1),
+            window(1, 100),
+        ])
+    };
+    let add = |layout: &mut Layout<TestWindow>, activate| {
+        let output = layout.monitors().nth(1).unwrap().output().clone();
+        layout.add_window(
+            TestWindow::new(TestWindowParams::new(2)),
+            AddWindowTarget::Output(&output),
+            None,
+            None,
+            false,
+            false,
+            activate,
+        );
+        layout.move_new_window_to_scratchpad(&2, None);
+        layout.verify_invariants();
+    };
+    let active_output = |layout: &Layout<TestWindow>| layout.active_output().unwrap().name();
+
+    let mut layout = setup();
+    add(&mut layout, ActivateWindow::No);
+    assert_eq!(active_output(&layout), "output1");
+    assert_snapshot!(summary(&layout), @"hidden: [2], shown: [], focus: Some(1)");
+
+    // Contrast: the map handler passes No, because activating moves the active output to where the
+    // window was added, and hiding the window doesn't bring it back.
+    let mut layout = setup();
+    add(&mut layout, ActivateWindow::Yes);
+    assert_eq!(active_output(&layout), "output2");
+}

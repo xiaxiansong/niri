@@ -1,0 +1,13 @@
+{"run_id":"1791301417-977341006","line":1828,"new":{"module_name":"niri__layout__tests__scratchpad","snapshot_name":"new_window_hidden_on_empty_workspace-2","metadata":{"source":"src/layout/tests/scratchpad.rs","assertion_line":1828,"expression":"workspaces(&layout)"},"snapshot":"output1: [] *[]"},"old":{"module_name":"niri__layout__tests__scratchpad","metadata":{},"snapshot":"output1: *[]"}}
+{"run_id":"1791301427-962659701","line":1777,"new":null,"old":null}
+{"run_id":"1791301427-962659701","line":1825,"new":null,"old":null}
+{"run_id":"1791301427-962659701","line":1883,"new":null,"old":null}
+{"run_id":"1791301427-962659701","line":1756,"new":null,"old":null}
+{"run_id":"1791301427-962659701","line":1850,"new":null,"old":null}
+{"run_id":"1791301427-962659701","line":1829,"new":null,"old":null}
+{"run_id":"1791301427-962659701","line":1831,"new":null,"old":null}
+{"run_id":"1791301427-962659701","line":1760,"new":null,"old":null}
+{"run_id":"1791301427-962659701","line":1782,"new":null,"old":null}
+{"run_id":"1791301427-962659701","line":1787,"new":null,"old":null}
+{"run_id":"1791301427-962659701","line":1771,"new":null,"old":null}
+{"run_id":"1791301427-962659701","line":1789,"new":null,"old":null}
