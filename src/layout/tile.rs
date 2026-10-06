@@ -87,6 +87,9 @@ pub struct Tile<W: LayoutElement> {
     /// Sequence number of the last time this tile was shown from the scratchpad.
     pub(super) scratchpad_shown_seq: u64,
 
+    /// Generation of the hiding animation of this hidden scratchpad tile, if any.
+    pub(super) scratchpad_hide_gen: Option<u64>,
+
     /// The animation upon opening a window.
     open_animation: Option<OpenAnimation>,
 
@@ -212,6 +215,7 @@ impl<W: LayoutElement> Tile<W> {
             floating_preset_height_idx: None,
             in_scratchpad: false,
             scratchpad_shown_seq: 0,
+            scratchpad_hide_gen: None,
             open_animation: None,
             resize_animation: None,
             move_x_animation: None,
@@ -588,6 +592,13 @@ impl<W: LayoutElement> Tile<W> {
             0.,
             self.options.animations.window_open.anim,
         )));
+    }
+
+    /// Returns the progress of the ongoing open animation, if any.
+    pub fn open_animation_progress(&self) -> Option<f64> {
+        self.open_animation
+            .as_ref()
+            .map(OpenAnimation::clamped_value)
     }
 
     pub fn resize_animation(&self) -> Option<&Animation> {

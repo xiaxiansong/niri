@@ -18,6 +18,7 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
 
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
+use super::hiding_window::HidingWindow;
 use super::scrolling::{
     Column, ColumnWidth, ScrollDirection, ScrollingSpace, ScrollingSpaceRenderElement,
 };
@@ -53,6 +54,9 @@ pub struct Workspace<W: LayoutElement> {
 
     /// Whether the floating layout is active instead of the scrolling layout.
     floating_is_active: FloatingActive,
+
+    /// Windows being hidden to the scratchpad from this workspace, animating out.
+    scratchpad_hiding: Vec<HidingWindow<W::Id>>,
 
     /// The original outputs of this workspace, in preference order.
     ///
@@ -262,6 +266,7 @@ impl<W: LayoutElement> Workspace<W> {
             scrolling,
             floating,
             floating_is_active: FloatingActive::No,
+            scratchpad_hiding: Vec::new(),
             original_outputs,
             scale,
             transform: output.current_transform(),
@@ -324,6 +329,7 @@ impl<W: LayoutElement> Workspace<W> {
             scrolling,
             floating,
             floating_is_active: FloatingActive::No,
+            scratchpad_hiding: Vec::new(),
             output: None,
             scale,
             transform: Transform::Normal,
@@ -368,14 +374,19 @@ impl<W: LayoutElement> Workspace<W> {
     pub fn advance_animations(&mut self) {
         self.scrolling.advance_animations();
         self.floating.advance_animations();
+        self.scratchpad_hiding.retain(|hiding| !hiding.is_done());
     }
 
     pub fn are_animations_ongoing(&self) -> bool {
-        self.scrolling.are_animations_ongoing() || self.floating.are_animations_ongoing()
+        self.scrolling.are_animations_ongoing()
+            || self.floating.are_animations_ongoing()
+            || !self.scratchpad_hiding.is_empty()
     }
 
     pub fn are_transitions_ongoing(&self) -> bool {
-        self.scrolling.are_transitions_ongoing() || self.floating.are_transitions_ongoing()
+        self.scrolling.are_transitions_ongoing()
+            || self.floating.are_transitions_ongoing()
+            || !self.scratchpad_hiding.is_empty()
     }
 
     pub fn update_render_elements(
@@ -524,6 +535,9 @@ impl<W: LayoutElement> Workspace<W> {
                 win.output_leave(&output);
             }
         }
+
+        // The hiding windows were animating on the old output.
+        self.scratchpad_hiding.clear();
 
         self.output = output;
 
@@ -799,6 +813,22 @@ impl<W: LayoutElement> Workspace<W> {
         if activate || self.scrolling.is_empty() {
             self.floating_is_active = FloatingActive::Yes;
         }
+    }
+
+    pub fn scratchpad_hiding(&self) -> &[HidingWindow<W::Id>] {
+        &self.scratchpad_hiding
+    }
+
+    pub fn add_scratchpad_hiding(&mut self, hiding: HidingWindow<W::Id>) {
+        self.scratchpad_hiding.push(hiding);
+    }
+
+    pub fn remove_scratchpad_hiding(&mut self, id: &W::Id) -> Option<HidingWindow<W::Id>> {
+        let idx = self
+            .scratchpad_hiding
+            .iter()
+            .position(|hiding| hiding.id == *id)?;
+        Some(self.scratchpad_hiding.remove(idx))
     }
 
     /// Takes the window out of the scratchpad, leaving it as a regular floating window.

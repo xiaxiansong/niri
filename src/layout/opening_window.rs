@@ -44,6 +44,10 @@ impl OpenAnimation {
         self.anim.is_done()
     }
 
+    pub fn clamped_value(&self) -> f64 {
+        self.anim.clamped_value()
+    }
+
     // We can't depend on view_rect here, because the result of window opening can be snapshot and
     // then rendered elsewhere.
     pub fn render(

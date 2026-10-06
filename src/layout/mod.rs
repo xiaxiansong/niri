@@ -52,6 +52,7 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size, Transform};
 use tile::{Tile, TileRenderElement};
 use workspace::{WorkspaceAddWindowTarget, WorkspaceId};
 
+use self::hiding_window::HidingWindow;
 pub use self::monitor::MonitorRenderElement;
 use self::monitor::{Monitor, WorkspaceSwitch};
 use self::workspace::{OutputId, Workspace};
@@ -78,6 +79,7 @@ use crate::window::ResolvedWindowRules;
 pub mod closing_window;
 pub mod floating;
 pub mod focus_ring;
+pub mod hiding_window;
 pub mod insert_hint_element;
 pub mod monitor;
 pub mod opening_window;
@@ -430,6 +432,8 @@ struct Scratchpad<W: LayoutElement> {
     hidden: VecDeque<Tile<W>>,
     /// Sequence number for the next shown tile, used to find the most recently shown one.
     next_seq: u64,
+    /// Generation for the next hiding, used to match hiding windows to hidden tiles.
+    next_gen: u64,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -764,6 +768,7 @@ impl<W: LayoutElement> Scratchpad<W> {
         Self {
             hidden: VecDeque::new(),
             next_seq: 0,
+            next_gen: 0,
         }
     }
 }
@@ -1308,6 +1313,10 @@ impl<W: LayoutElement> Layout<W> {
             .position(|tile| tile.window().id() == window)
         {
             let tile = self.scratchpad.hidden.remove(idx).unwrap();
+            for ws in self.workspaces_mut() {
+                ws.remove_scratchpad_hiding(window);
+            }
+
             let width = ColumnWidth::Fixed(tile.tile_size().w);
             return Some(RemovedTile {
                 tile,
@@ -2762,6 +2771,35 @@ impl<W: LayoutElement> Layout<W> {
             );
         }
 
+        let mut seen_hiding_ids = Vec::new();
+        for (_, _, ws) in self.workspaces() {
+            for hiding in ws.scratchpad_hiding() {
+                assert!(
+                    matches!(self.monitor_set, MonitorSet::Normal { .. }),
+                    "with no outputs there cannot be hiding windows"
+                );
+
+                let tile = self
+                    .scratchpad
+                    .hidden
+                    .iter()
+                    .find(|tile| *tile.window().id() == hiding.id)
+                    .expect("hiding window must be hidden in the scratchpad");
+                assert_eq!(
+                    tile.scratchpad_hide_gen,
+                    Some(hiding.gen),
+                    "hiding window generation must match the hidden tile"
+                );
+
+                assert!(
+                    !seen_hiding_ids.contains(&hiding.id),
+                    "window must be hiding at most once: {:?}",
+                    hiding.id
+                );
+                seen_hiding_ids.push(hiding.id.clone());
+            }
+        }
+
         let mut seen_workspace_id = HashSet::new();
         let mut seen_workspace_name = Vec::<String>::new();
 
@@ -3589,6 +3627,20 @@ impl<W: LayoutElement> Layout<W> {
             return None;
         }
 
+        // Animate hiding only where the window is visible: on the active workspace of a monitor.
+        let is_on_active_workspace = match &self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => monitors
+                .iter()
+                .any(|mon| mon.workspaces[mon.active_workspace_idx].has_window(&id)),
+            MonitorSet::NoOutputs { .. } => false,
+        };
+        let animate = is_on_active_workspace && !self.options.animations.window_open.anim.off;
+        let hide_gen = animate.then(|| {
+            let gen = self.scratchpad.next_gen;
+            self.scratchpad.next_gen += 1;
+            gen
+        });
+
         let ws = self.workspaces_mut().find(|ws| ws.has_window(&id))?;
         let ws_id = ws.id();
 
@@ -3628,6 +3680,20 @@ impl<W: LayoutElement> Layout<W> {
 
             ws.fill_view_after_removal();
         }
+
+        if let Some(gen) = hide_gen {
+            // Play the open animation backwards, from where it currently is.
+            let from = tile.open_animation_progress().unwrap_or(1.);
+            let anim = Animation::new(
+                tile.clock.clone(),
+                from,
+                0.,
+                0.,
+                tile.options().animations.window_open.anim,
+            );
+            ws.add_scratchpad_hiding(HidingWindow::new(id.clone(), gen, anim));
+        }
+        tile.scratchpad_hide_gen = hide_gen;
 
         tile.stop_all_animations();
         tile.interactive_move_offset = Point::from((0., 0.));
@@ -3704,6 +3770,15 @@ impl<W: LayoutElement> Layout<W> {
             return false;
         };
         let mut tile = self.scratchpad.hidden.remove(idx).unwrap();
+
+        // At most one of hiding and showing animates at a time.
+        for ws in monitors
+            .iter_mut()
+            .flat_map(|mon| mon.workspaces.iter_mut())
+        {
+            ws.remove_scratchpad_hiding(window);
+        }
+        tile.scratchpad_hide_gen = None;
 
         set_tile_scratchpad(&mut tile, ScratchpadState::Shown);
         tile.scratchpad_shown_seq = self.scratchpad.next_seq;
