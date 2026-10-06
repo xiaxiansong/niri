@@ -1081,8 +1081,7 @@ impl<W: LayoutElement> Monitor<W> {
         // source workspace itself was removed, don't bother animating this since the removal is
         // instant anyway.
         if let Some(source_workspace_idx) = self.idx_of_ws(source_id) {
-            old_render_pos.y +=
-                self.workspace_size_with_gap(1.).h * (source_workspace_idx as f64 - new_idx as f64);
+            old_render_pos.y += self.workspace_distance(source_workspace_idx, new_idx);
         }
 
         let (tile, new_render_pos) = self.workspaces[new_idx]
@@ -1134,10 +1133,6 @@ impl<W: LayoutElement> Monitor<W> {
         let column = workspace.remove_active_column().unwrap();
         workspace.fill_view_after_removal();
 
-        // Animate vertical movement between workspaces.
-        old_render_pos.y +=
-            self.workspace_size_with_gap(1.).h * (source_workspace_idx as f64 - new_idx as f64);
-
         // If the view is following the column, match the animation.
         let config = if activate {
             self.options.animations.workspace_switch.0
@@ -1145,10 +1140,20 @@ impl<W: LayoutElement> Monitor<W> {
             self.options.animations.window_movement.0
         };
 
+        let source_id = self.workspaces[source_workspace_idx].id();
         let new_id = self.workspaces[new_idx].id();
+        let fallback_distance = self.workspace_distance(source_workspace_idx, new_idx);
         self.add_column(new_idx, column, activate, Some(config));
 
         let new_idx = self.idx_of_ws(new_id).unwrap();
+
+        // Animate vertical movement between workspaces. This is after adding the column since
+        // that can start a workspace switch that changes how the workspaces are laid out.
+        old_render_pos.y += match self.idx_of_ws(source_id) {
+            Some(source_workspace_idx) => self.workspace_distance(source_workspace_idx, new_idx),
+            None => fallback_distance,
+        };
+
         let (column, new_render_pos) = self.workspaces[new_idx]
             .scrolling_mut()
             .columns_with_render_positions_mut()
@@ -1724,6 +1729,24 @@ impl<W: LayoutElement> Monitor<W> {
         }
     }
 
+    /// Vertical distance from the workspace at `new_idx` to the one at `source_idx`, as laid out.
+    ///
+    /// Used to move things between workspaces. Normally that's the distance between the
+    /// workspaces in the strip, but a skipping workspace switch shows them differently.
+    fn workspace_distance(&self, source_idx: usize, new_idx: usize) -> f64 {
+        let ws_height_with_gap = self.workspace_size_with_gap(1.).h;
+
+        if let Some(skip) = self.workspace_switch_skip() {
+            let positions = self.skip_item_positions(skip);
+            let find = |idx| positions.iter().find(|(i, _)| *i == idx).map(|(_, y)| *y);
+            if let (Some(source_y), Some(new_y)) = (find(source_idx), find(new_idx)) {
+                return (source_y - new_y) * ws_height_with_gap;
+            }
+        }
+
+        ws_height_with_gap * (source_idx as f64 - new_idx as f64)
+    }
+
     /// Workspace indices and positions of the items of a skipping workspace switch.
     ///
     /// Positions are in workspace heights from where the active workspace is at rest. Items whose
@@ -1799,13 +1822,11 @@ impl<W: LayoutElement> Monitor<W> {
                 .0;
         } else {
             let render_idx = self.workspace_render_idx();
-            if (target_idx as f64 - render_idx).abs() < 1.5 {
-                // Close enough that the workspaces in between don't matter.
-                return None;
-            }
 
             let first = (render_idx - 1.).floor().max(0.) as usize;
             let last = ((render_idx + 1.).ceil() as usize).min(self.workspaces.len() - 1);
+            // The visible workspaces are always contiguous, and there's always at least one.
+            let (mut lowest, mut highest) = (usize::MAX, 0);
             for idx in first..=last {
                 let y = idx as f64 - render_idx;
                 if y.abs() < 1. {
@@ -1813,7 +1834,19 @@ impl<W: LayoutElement> Monitor<W> {
                         id: self.workspaces[idx].id(),
                         y,
                     });
+                    lowest = lowest.min(idx);
+                    highest = highest.max(idx);
                 }
+            }
+
+            // If the target is right next to what's on screen, or to where we're already going,
+            // then it's a regular scroll. This makes holding down a key to go through the
+            // workspaces one by one look the same as always, even if the view lags behind.
+            let near_view = lowest.saturating_sub(1)..=highest + 1;
+            let near_target =
+                self.active_workspace_idx.saturating_sub(1)..=self.active_workspace_idx + 1;
+            if near_view.contains(&target_idx) || near_target.contains(&target_idx) {
+                return None;
             }
 
             center_idx = render_idx.round() as usize;

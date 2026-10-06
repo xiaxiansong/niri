@@ -1507,3 +1507,92 @@ fn skipping_switch_survives_workspace_insertions() {
     let active = layout.monitors().next().unwrap().active_workspace_idx();
     assert_eq!(workspace_geos(&layout)[active].loc.y, 0.);
 }
+
+/// Y position on screen of the window, including its move animation.
+fn window_screen_y(layout: &mut Layout<TestWindow>, id: usize) -> f64 {
+    let mon = layout.monitors_mut().next().unwrap();
+    mon.workspaces_with_render_geo_mut(false)
+        .find_map(|(ws, geo)| {
+            ws.tiles_with_render_positions_mut(false)
+                .find(|(tile, _)| tile.window().id() == &id)
+                .map(|(_, pos)| geo.loc.y + pos.y)
+        })
+        .unwrap()
+}
+
+#[test]
+fn moving_window_across_skipped_workspaces_starts_from_where_it_was() {
+    let mut layout = set_up_workspaces(5);
+    let before = window_screen_y(&mut layout, 1);
+
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWindowToWorkspace {
+            window_id: Some(1),
+            workspace_idx: 4,
+        }],
+    );
+    assert_eq!(window_screen_y(&mut layout, 1), before);
+
+    // And then arrives at the new workspace together with the view.
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    let at_rest = window_screen_y(&mut layout, 1);
+    assert_eq!(at_rest, before);
+}
+
+#[test]
+fn moving_column_across_skipped_workspaces_starts_from_where_it_was() {
+    let mut layout = set_up_workspaces(5);
+    let before = window_screen_y(&mut layout, 1);
+
+    check_ops_on_layout(&mut layout, [Op::MoveColumnToWorkspace(4, true)]);
+    assert_eq!(window_screen_y(&mut layout, 1), before);
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_eq!(window_screen_y(&mut layout, 1), before);
+}
+
+#[test]
+fn moving_window_during_skipping_switch_does_not_jump() {
+    let mut layout = set_up_workspaces(5);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(4),
+            Op::AdvanceAnimations { msec_delta: 400 },
+        ],
+    );
+    let before = window_screen_y(&mut layout, 1);
+
+    // Active workspace is 4, and 0 is still on screen.
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWindowToWorkspace {
+            window_id: Some(1),
+            workspace_idx: 4,
+        }],
+    );
+    assert_eq!(window_screen_y(&mut layout, 1), before);
+}
+
+#[test]
+fn repeated_neighbor_switches_are_not_skipping() {
+    // Holding the key to go through workspaces one by one is a regular scroll.
+    let mut layout = set_up_workspaces(6);
+    for target in 1..5 {
+        check_ops_on_layout(
+            &mut layout,
+            [
+                Op::FocusWorkspace(target),
+                Op::AdvanceAnimations { msec_delta: 50 },
+            ],
+        );
+        assert!(
+            layout.monitors().next().unwrap().skip_dimming().is_empty(),
+            "switch to {target} is skipping"
+        );
+    }
+
+    // All of the workspaces in between were seen on the way.
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+}
