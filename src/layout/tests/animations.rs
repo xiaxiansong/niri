@@ -1097,3 +1097,413 @@ fn width_resize_and_cancel_of_column_to_the_left() {
     200 × 200 at x:100 y:  0
     ");
 }
+
+fn set_up_workspaces(count: usize) -> Layout<TestWindow> {
+    let mut options = make_options();
+    options.animations.workspace_switch.0.kind = Kind::Easing(EasingParams {
+        duration_ms: 1000,
+        curve: Curve::Linear,
+    });
+
+    let mut layout = Layout::with_options(Clock::with_time(Duration::ZERO), options);
+    check_ops_on_layout(&mut layout, [Op::AddOutput(1)]);
+
+    // One window per workspace, plus the empty workspace at the end.
+    for id in 1..count {
+        check_ops_on_layout(
+            &mut layout,
+            [
+                Op::AddWindow {
+                    params: TestWindowParams::new(id),
+                },
+                Op::FocusWorkspaceDown,
+            ],
+        );
+    }
+    check_ops_on_layout(&mut layout, [Op::FocusWorkspace(0), Op::CompleteAnimations]);
+    layout
+}
+
+fn workspace_geos(layout: &Layout<TestWindow>) -> Vec<Rectangle<f64, Logical>> {
+    let mon = layout.monitors().next().unwrap();
+    mon.workspaces_render_geo().collect()
+}
+
+fn is_visible(layout: &Layout<TestWindow>, idx: usize) -> bool {
+    let mon = layout.monitors().next().unwrap();
+    let output = Rectangle::from_size(
+        mon.output()
+            .current_mode()
+            .unwrap()
+            .size
+            .to_logical(1)
+            .to_f64(),
+    );
+    workspace_geos(layout)[idx].intersection(output).is_some()
+}
+
+#[test]
+fn workspace_switch_skips_workspaces_in_between() {
+    let mut layout = set_up_workspaces(5);
+    let at_rest = workspace_geos(&layout);
+    let step = at_rest[1].loc.y - at_rest[0].loc.y;
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(4),
+            Op::AdvanceAnimations { msec_delta: 500 },
+        ],
+    );
+
+    let geos = workspace_geos(&layout);
+    assert!(is_visible(&layout, 0));
+    assert!(!is_visible(&layout, 1));
+    assert!(!is_visible(&layout, 2));
+    assert!(!is_visible(&layout, 3));
+    assert!(is_visible(&layout, 4));
+
+    // Halfway through, the two workspaces are next to each other, each half moved.
+    assert_eq!(geos[4].loc.y - geos[0].loc.y, step);
+    assert_eq!(geos[0].loc.y, at_rest[0].loc.y - step / 2.);
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    let geos = workspace_geos(&layout);
+    assert_eq!(geos[4].loc.y, at_rest[0].loc.y);
+}
+
+#[test]
+fn workspace_switch_skips_upwards() {
+    let mut layout = set_up_workspaces(5);
+    check_ops_on_layout(&mut layout, [Op::FocusWorkspace(4), Op::CompleteAnimations]);
+    let at_rest = workspace_geos(&layout);
+    let step = at_rest[1].loc.y - at_rest[0].loc.y;
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(1),
+            Op::AdvanceAnimations { msec_delta: 250 },
+        ],
+    );
+
+    let geos = workspace_geos(&layout);
+    assert!(is_visible(&layout, 4));
+    assert!(is_visible(&layout, 1));
+    assert!(!is_visible(&layout, 2));
+    assert!(!is_visible(&layout, 3));
+    // Workspace 1 is above workspace 4.
+    assert_eq!(geos[4].loc.y - geos[1].loc.y, step);
+}
+
+#[test]
+fn workspace_switch_to_neighbor_is_unchanged() {
+    let mut layout = set_up_workspaces(5);
+    let at_rest = workspace_geos(&layout);
+    let step = at_rest[1].loc.y - at_rest[0].loc.y;
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(1),
+            Op::AdvanceAnimations { msec_delta: 500 },
+        ],
+    );
+
+    let geos = workspace_geos(&layout);
+    assert_eq!(geos[0].loc.y, at_rest[0].loc.y - step / 2.);
+    assert_eq!(geos[1].loc.y, at_rest[1].loc.y - step / 2.);
+    assert_eq!(geos[2].loc.y, at_rest[2].loc.y - step / 2.);
+}
+
+/// Indices and Y positions of the workspaces on screen, in a stable order.
+fn visible_workspaces(layout: &Layout<TestWindow>) -> Vec<(usize, f64)> {
+    let geos = workspace_geos(layout);
+    (0..geos.len() - 1)
+        .filter(|&idx| is_visible(layout, idx))
+        .map(|idx| (idx, geos[idx].loc.y))
+        .collect()
+}
+
+/// Checks that the workspaces that were on screen didn't move because of `ops`.
+#[track_caller]
+fn assert_view_continuous(layout: &mut Layout<TestWindow>, ops: impl IntoIterator<Item = Op>) {
+    let before = visible_workspaces(layout);
+    check_ops_on_layout(layout, ops);
+    let after = visible_workspaces(layout);
+    for (idx, y) in before {
+        let moved = after.iter().find(|(i, _)| *i == idx);
+        assert_eq!(moved.map(|(_, y)| *y), Some(y), "workspace {idx} jumped");
+    }
+}
+
+#[test]
+fn skipping_switch_reversed_midway_is_continuous() {
+    let mut layout = set_up_workspaces(5);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(4),
+            Op::AdvanceAnimations { msec_delta: 300 },
+        ],
+    );
+    assert_eq!(visible_workspaces(&layout).len(), 2);
+
+    assert_view_continuous(&mut layout, [Op::FocusWorkspace(0)]);
+
+    // It goes back to where it started, without going through the workspaces in between.
+    check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 400 }]);
+    assert!(!is_visible(&layout, 2));
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_eq!(workspace_geos(&layout)[0].loc.y, 0.);
+    assert_eq!(visible_workspaces(&layout), vec![(0, 0.)]);
+}
+
+#[test]
+fn skipping_switch_to_third_workspace_midway_is_continuous() {
+    let mut layout = set_up_workspaces(5);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(4),
+            Op::AdvanceAnimations { msec_delta: 300 },
+        ],
+    );
+
+    assert_view_continuous(&mut layout, [Op::FocusWorkspace(2)]);
+    check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 500 }]);
+    assert!(!is_visible(&layout, 3));
+    assert!(!is_visible(&layout, 1));
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_eq!(workspace_geos(&layout)[2].loc.y, 0.);
+}
+
+#[test]
+fn skipping_switch_to_the_same_target_midway_is_noop() {
+    let mut layout = set_up_workspaces(5);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(4),
+            Op::AdvanceAnimations { msec_delta: 300 },
+        ],
+    );
+    let before = workspace_geos(&layout);
+    check_ops_on_layout(&mut layout, [Op::FocusWorkspace(4)]);
+    assert_eq!(workspace_geos(&layout), before);
+}
+
+#[test]
+fn skipping_switch_interrupts_neighbor_switch_midway() {
+    let mut layout = set_up_workspaces(5);
+    // Halfway between 0 and 1, then to somewhere far away.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(1),
+            Op::AdvanceAnimations { msec_delta: 500 },
+        ],
+    );
+    assert_eq!(visible_workspaces(&layout).len(), 2);
+
+    assert_view_continuous(&mut layout, [Op::FocusWorkspace(4)]);
+    check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 500 }]);
+    assert!(!is_visible(&layout, 2));
+    assert!(!is_visible(&layout, 3) || is_visible(&layout, 4));
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_eq!(workspace_geos(&layout)[4].loc.y, 0.);
+}
+
+#[test]
+fn skipping_switch_keeps_going_up_and_down() {
+    // Back and forth between several targets at arbitrary times, nothing may jump.
+    let mut layout = set_up_workspaces(6);
+    for (target, msec_delta) in [(5, 100), (0, 250), (3, 50), (1, 400), (5, 10), (2, 700)] {
+        check_ops_on_layout(
+            &mut layout,
+            [
+                Op::FocusWorkspace(target),
+                Op::AdvanceAnimations { msec_delta },
+            ],
+        );
+        let index = visible_workspaces(&layout);
+        assert!((1..=3).contains(&index.len()), "{index:?}");
+    }
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_eq!(workspace_geos(&layout)[2].loc.y, 0.);
+}
+
+#[test]
+fn skipping_switch_is_dimmed_by_distance() {
+    let mut layout = set_up_workspaces(5);
+    let dimming =
+        |layout: &Layout<TestWindow>| layout.monitors().next().unwrap().skip_dimming().to_vec();
+    assert!(dimming(&layout).is_empty());
+
+    check_ops_on_layout(&mut layout, [Op::FocusWorkspace(4)]);
+    // At the very start the active workspace is in place, and the other one is out of view.
+    let start = dimming(&layout);
+    assert_eq!(start.len(), 1);
+    assert_eq!(start[0].0, 4);
+
+    check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 500 }]);
+    let middle = dimming(&layout);
+    assert_eq!(middle.len(), 2);
+    assert_eq!(middle[0].1, middle[1].1);
+    assert!(middle[0].1 > 0.);
+
+    check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 400 }]);
+    let late = dimming(&layout);
+    let (leaving, entering) = (
+        late.iter().find(|(idx, _)| *idx == 0).unwrap().1,
+        late.iter().find(|(idx, _)| *idx == 4).unwrap().1,
+    );
+    assert!(leaving > middle[0].1);
+    assert!(entering < middle[0].1);
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert!(dimming(&layout).is_empty());
+}
+
+#[test]
+fn neighbor_switch_is_not_dimmed() {
+    let mut layout = set_up_workspaces(5);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(1),
+            Op::AdvanceAnimations { msec_delta: 500 },
+        ],
+    );
+    assert!(layout.monitors().next().unwrap().skip_dimming().is_empty());
+}
+
+#[test]
+fn opening_overview_during_skipping_switch_is_continuous() {
+    let mut layout = set_up_workspaces(5);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(4),
+            Op::AdvanceAnimations { msec_delta: 350 },
+        ],
+    );
+
+    // The most visible workspace stays where it is.
+    let (idx, y) = visible_workspaces(&layout)
+        .into_iter()
+        .min_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+        .unwrap();
+    check_ops_on_layout(&mut layout, [Op::ToggleOverview]);
+    assert_eq!(workspace_geos(&layout)[idx].loc.y, y);
+    assert!(layout.monitors().next().unwrap().skip_dimming().is_empty());
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+}
+
+#[test]
+fn switching_in_overview_does_not_skip() {
+    let mut layout = set_up_workspaces(5);
+    check_ops_on_layout(&mut layout, [Op::ToggleOverview, Op::CompleteAnimations]);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(4),
+            Op::AdvanceAnimations { msec_delta: 500 },
+        ],
+    );
+    assert!(layout.monitors().next().unwrap().skip_dimming().is_empty());
+    assert!(is_visible(&layout, 2));
+}
+
+#[test]
+fn gesture_during_skipping_switch_is_continuous() {
+    let mut layout = set_up_workspaces(5);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(4),
+            Op::AdvanceAnimations { msec_delta: 350 },
+        ],
+    );
+
+    let (idx, y) = visible_workspaces(&layout)
+        .into_iter()
+        .min_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+        .unwrap();
+    check_ops_on_layout(
+        &mut layout,
+        [Op::WorkspaceSwitchGestureBegin {
+            output_idx: 1,
+            is_touchpad: true,
+        }],
+    );
+    assert_eq!(workspace_geos(&layout)[idx].loc.y, y);
+    assert!(layout.monitors().next().unwrap().skip_dimming().is_empty());
+
+    // Ending the gesture never skips, it's a regular animation.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::WorkspaceSwitchGestureEnd {
+                is_touchpad: Some(true),
+            },
+            Op::AdvanceAnimations { msec_delta: 10 },
+        ],
+    );
+    assert!(layout.monitors().next().unwrap().skip_dimming().is_empty());
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+}
+
+#[test]
+fn skipping_switch_survives_workspace_insertions() {
+    let mut options = make_options();
+    options.layout.empty_workspace_above_first = true;
+    let mut layout = Layout::with_options(Clock::with_time(Duration::ZERO), options);
+
+    check_ops_on_layout(&mut layout, [Op::AddOutput(1)]);
+    for id in 1..=3 {
+        check_ops_on_layout(
+            &mut layout,
+            [
+                Op::AddWindow {
+                    params: TestWindowParams::new(id),
+                },
+                Op::FocusWorkspaceDown,
+                Op::CompleteAnimations,
+            ],
+        );
+    }
+
+    // Going to the empty workspace at the top, then adding a window to it which inserts another
+    // empty workspace above, in the middle of the switch.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(0),
+            Op::AdvanceAnimations { msec_delta: 100 },
+        ],
+    );
+    assert_eq!(visible_workspaces(&layout).len(), 2);
+    let before = visible_workspaces(&layout);
+    check_ops_on_layout(
+        &mut layout,
+        [Op::AddWindow {
+            params: TestWindowParams::new(100),
+        }],
+    );
+
+    // Everything on screen shifted down by the new workspace, but didn't move.
+    let after = visible_workspaces(&layout);
+    assert_eq!(before.len(), after.len());
+    for ((before_idx, before_y), (after_idx, after_y)) in before.into_iter().zip(after) {
+        assert_eq!(before_idx + 1, after_idx);
+        assert_eq!(before_y, after_y);
+    }
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    let active = layout.monitors().next().unwrap().active_workspace_idx();
+    assert_eq!(workspace_geos(&layout)[active].loc.y, 0.);
+}

@@ -3,10 +3,13 @@ use std::iter::zip;
 use std::rc::Rc;
 use std::time::Duration;
 
+use arrayvec::ArrayVec;
 use niri_config::{CornerRadius, LayoutPart};
 use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
 };
+use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::Color32F;
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
@@ -24,7 +27,7 @@ use crate::layout::RenderLayer;
 use crate::niri_render_elements;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::shadow::ShadowRenderElement;
-use crate::render_helpers::solid_color::SolidColorRenderElement;
+use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
 use crate::rubber_band::RubberBand;
@@ -73,6 +76,8 @@ pub struct Monitor<W: LayoutElement> {
     pub(super) workspace_switch: Option<WorkspaceSwitch>,
     /// Indication where an interactively-moved window is about to be placed.
     pub(super) insert_hint: Option<InsertHint>,
+    /// Buffer for darkening workspaces during a skipping workspace switch.
+    skip_dim_buffer: SolidColorBuffer,
     /// Insert hint element for rendering.
     insert_hint_element: InsertHintElement,
     /// Location to render the insert hint element.
@@ -94,6 +99,7 @@ pub struct Monitor<W: LayoutElement> {
 #[derive(Debug)]
 pub enum WorkspaceSwitch {
     Animation(Animation),
+    Skip(WorkspaceSwitchSkip),
     Gesture(WorkspaceSwitchGesture),
 }
 
@@ -197,10 +203,51 @@ niri_render_elements! {
 pub type MonitorRenderElement<R> =
     RelocateRenderElement<RescaleRenderElement<MonitorInnerRenderElement<R>>>;
 
+/// How much to darken a workspace that is fully moved out, during a skipping workspace switch.
+const SKIP_DIM: f32 = 0.35;
+
+/// A workspace switch where the workspaces in between aren't shown.
+///
+/// Workspaces that aren't next to each other still move like they were: the visible workspaces
+/// and the one we're switching to form a strip that scrolls as a whole. This also lets an
+/// interrupted switch continue from wherever it was, without any jumps.
+#[derive(Debug)]
+pub struct WorkspaceSwitchSkip {
+    /// Progress of the switch, from 0 to 1.
+    anim: Animation,
+    /// Workspaces that are shown at some point during the switch.
+    items: ArrayVec<SkipItem, 4>,
+    /// How far the strip moves over the whole switch, in workspace heights.
+    delta: f64,
+    /// Index of the workspace we're switching to.
+    target_idx: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SkipItem {
+    id: WorkspaceId,
+    /// Position at the start, in workspace heights from where the active workspace is at rest.
+    y: f64,
+}
+
+impl WorkspaceSwitchSkip {
+    /// Current position of the item, in workspace heights.
+    fn y(&self, item: &SkipItem) -> f64 {
+        item.y + self.delta * self.anim.value()
+    }
+
+    /// How much to darken a workspace at the position: the further it is, the darker.
+    fn dim_alpha(y: f64) -> f32 {
+        SKIP_DIM * y.abs().min(1.) as f32
+    }
+}
+
 impl WorkspaceSwitch {
     pub fn current_idx(&self) -> f64 {
         match self {
             WorkspaceSwitch::Animation(anim) => anim.value(),
+            // The positions are by workspace, see Monitor::workspace_render_idx().
+            WorkspaceSwitch::Skip(skip) => skip.target_idx,
             WorkspaceSwitch::Gesture(gesture) => {
                 gesture.current_idx + gesture.animation.as_ref().map_or(0., |anim| anim.value())
             }
@@ -210,6 +257,7 @@ impl WorkspaceSwitch {
     pub fn target_idx(&self) -> f64 {
         match self {
             WorkspaceSwitch::Animation(anim) => anim.to(),
+            WorkspaceSwitch::Skip(skip) => skip.target_idx,
             WorkspaceSwitch::Gesture(gesture) => gesture.current_idx,
         }
     }
@@ -217,6 +265,8 @@ impl WorkspaceSwitch {
     pub fn offset(&mut self, delta: isize) {
         match self {
             WorkspaceSwitch::Animation(anim) => anim.offset(delta as f64),
+            // The items are tracked by workspace ID, so only the target index needs adjusting.
+            WorkspaceSwitch::Skip(skip) => skip.target_idx += delta as f64,
             WorkspaceSwitch::Gesture(gesture) => {
                 if delta >= 0 {
                     gesture.center_idx += delta as usize;
@@ -231,7 +281,7 @@ impl WorkspaceSwitch {
 
     fn is_animation_ongoing(&self) -> bool {
         match self {
-            WorkspaceSwitch::Animation(_) => true,
+            WorkspaceSwitch::Animation(_) | WorkspaceSwitch::Skip(_) => true,
             WorkspaceSwitch::Gesture(gesture) => gesture.animation.is_some(),
         }
     }
@@ -338,6 +388,7 @@ impl<W: LayoutElement> Monitor<W> {
             active_workspace_idx,
             previous_workspace_id: None,
             insert_hint: None,
+            skip_dim_buffer: SolidColorBuffer::new(view_size, Color32F::BLACK),
             insert_hint_element: InsertHintElement::new(options.layout.insert_hint),
             insert_hint_render_loc: None,
             overview_open: false,
@@ -456,9 +507,17 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         let prev_active_idx = self.active_workspace_idx;
-        self.active_workspace_idx = idx;
 
         let config = config.unwrap_or(self.options.animations.workspace_switch.0);
+
+        // Must be computed before changing the active workspace.
+        let skip = if prev_active_idx != idx {
+            self.start_workspace_switch_skip(idx, config)
+        } else {
+            None
+        };
+
+        self.active_workspace_idx = idx;
 
         match &mut self.workspace_switch {
             // During a DnD scroll, we want to visually animate even if idx matches the active idx.
@@ -477,13 +536,16 @@ impl<W: LayoutElement> Monitor<W> {
             _ => {
                 // Don't animate if nothing changed.
                 if prev_active_idx != idx {
-                    self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::new(
-                        self.clock.clone(),
-                        current_idx,
-                        idx as f64,
-                        0.,
-                        config,
-                    )));
+                    self.workspace_switch = Some(match skip {
+                        Some(skip) => WorkspaceSwitch::Skip(skip),
+                        None => WorkspaceSwitch::Animation(Animation::new(
+                            self.clock.clone(),
+                            current_idx,
+                            idx as f64,
+                            0.,
+                            config,
+                        )),
+                    });
                 }
             }
         }
@@ -1163,6 +1225,12 @@ impl<W: LayoutElement> Monitor<W> {
                     self.clean_up_workspaces();
                 }
             }
+            Some(WorkspaceSwitch::Skip(skip)) => {
+                if skip.anim.is_done() {
+                    self.workspace_switch = None;
+                    self.clean_up_workspaces();
+                }
+            }
             Some(WorkspaceSwitch::Gesture(gesture)) => {
                 // Make sure the last event time doesn't go too much out of date (for
                 // monitors not under cursor), causing sudden jumps.
@@ -1211,6 +1279,8 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn update_render_elements(&mut self, is_active: bool) {
+        self.skip_dim_buffer.resize(self.workspace_size(1.));
+
         let mut insert_hint_ws_geo = None;
         let insert_hint_ws_id = self
             .insert_hint
@@ -1516,6 +1586,11 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub(super) fn set_overview_progress(&mut self, progress: Option<&super::OverviewProgress>) {
+        // The overview shows all workspaces in order, so it can't show a skipping switch.
+        if progress.is_some() {
+            self.collapse_workspace_switch_skip();
+        }
+
         let prev_render_idx = self.workspace_render_idx();
         let prev_pin_geo = self.scratchpad_pin_geo();
         let prev_active_geo = self.active_workspace_render_geo();
@@ -1632,11 +1707,153 @@ impl<W: LayoutElement> Monitor<W> {
             }
         };
 
-        if let Some(switch) = &self.workspace_switch {
+        if let Some(WorkspaceSwitch::Skip(skip)) = &self.workspace_switch {
+            self.skip_render_idx(skip)
+        } else if let Some(switch) = &self.workspace_switch {
             switch.current_idx()
         } else {
             self.active_workspace_idx as f64
         }
+    }
+
+    /// Returns the skipping workspace switch, if one is in progress.
+    fn workspace_switch_skip(&self) -> Option<&WorkspaceSwitchSkip> {
+        match &self.workspace_switch {
+            Some(WorkspaceSwitch::Skip(skip)) => Some(skip),
+            _ => None,
+        }
+    }
+
+    /// Workspace indices and positions of the items of a skipping workspace switch.
+    ///
+    /// Positions are in workspace heights from where the active workspace is at rest. Items whose
+    /// workspace is gone are left out.
+    fn skip_item_positions(&self, skip: &WorkspaceSwitchSkip) -> ArrayVec<(usize, f64), 4> {
+        skip.items
+            .iter()
+            .filter_map(|item| Some((self.idx_of_ws(item.id)?, skip.y(item))))
+            .collect()
+    }
+
+    /// Workspace render index that puts the most visible workspace of a skipping switch in place.
+    fn skip_render_idx(&self, skip: &WorkspaceSwitchSkip) -> f64 {
+        self.skip_item_positions(skip)
+            .into_iter()
+            .min_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+            .map_or(skip.target_idx, |(idx, y)| idx as f64 - y)
+    }
+
+    /// Replaces a skipping workspace switch with a regular one, if there is one in progress.
+    ///
+    /// The most visible workspace stays where it is. The others may jump.
+    fn collapse_workspace_switch_skip(&mut self) {
+        let Some(WorkspaceSwitch::Skip(skip)) = &self.workspace_switch else {
+            return;
+        };
+
+        let from = self.skip_render_idx(skip);
+        let config = self.options.animations.workspace_switch.0;
+        self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::new(
+            self.clock.clone(),
+            from,
+            self.active_workspace_idx as f64,
+            0.,
+            config,
+        )));
+    }
+
+    /// Starts a skipping workspace switch to `target_idx`, if that is warranted.
+    ///
+    /// Switching between workspaces that aren't next to each other skips the workspaces in
+    /// between. This should be called before changing the active workspace.
+    fn start_workspace_switch_skip(
+        &self,
+        target_idx: usize,
+        config: niri_config::Animation,
+    ) -> Option<WorkspaceSwitchSkip> {
+        // The overview needs the real layout of all workspaces.
+        if self.overview_progress.is_some() {
+            return None;
+        }
+
+        // Workspaces that are currently on screen, with their positions.
+        let mut items: ArrayVec<SkipItem, 4> = ArrayVec::new();
+        // Index of the most visible workspace.
+        let center_idx;
+
+        if let Some(WorkspaceSwitch::Skip(skip)) = &self.workspace_switch {
+            // Continue from wherever the current skipping switch is.
+            for (idx, y) in self.skip_item_positions(skip) {
+                if y.abs() < 1. {
+                    items.push(SkipItem {
+                        id: self.workspaces[idx].id(),
+                        y,
+                    });
+                }
+            }
+
+            center_idx = self
+                .skip_item_positions(skip)
+                .into_iter()
+                .min_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))?
+                .0;
+        } else {
+            let render_idx = self.workspace_render_idx();
+            if (target_idx as f64 - render_idx).abs() < 1.5 {
+                // Close enough that the workspaces in between don't matter.
+                return None;
+            }
+
+            let first = (render_idx - 1.).floor().max(0.) as usize;
+            let last = ((render_idx + 1.).ceil() as usize).min(self.workspaces.len() - 1);
+            for idx in first..=last {
+                let y = idx as f64 - render_idx;
+                if y.abs() < 1. {
+                    items.push(SkipItem {
+                        id: self.workspaces[idx].id(),
+                        y,
+                    });
+                }
+            }
+
+            center_idx = render_idx.round() as usize;
+        }
+
+        let target_id = self.workspaces[target_idx].id();
+        let target_y = match items.iter().find(|item| item.id == target_id) {
+            // Already visible, for example when going back.
+            Some(item) => item.y,
+            None => {
+                // Put the target right next to the visible workspaces, on the side it is on.
+                let y = if target_idx > center_idx {
+                    items.iter().map(|item| item.y).fold(f64::MIN, f64::max) + 1.
+                } else {
+                    items.iter().map(|item| item.y).fold(f64::MAX, f64::min) - 1.
+                };
+                items.push(SkipItem { id: target_id, y });
+                y
+            }
+        };
+
+        Some(WorkspaceSwitchSkip {
+            anim: Animation::new(self.clock.clone(), 0., 1., 0., config),
+            items,
+            delta: -target_y,
+            target_idx: target_idx as f64,
+        })
+    }
+
+    /// Workspace indices and how much to darken them, during a skipping workspace switch.
+    pub(super) fn skip_dimming(&self) -> ArrayVec<(usize, f32), 4> {
+        let Some(skip) = self.workspace_switch_skip() else {
+            return ArrayVec::new();
+        };
+
+        self.skip_item_positions(skip)
+            .into_iter()
+            .map(|(idx, y)| (idx, WorkspaceSwitchSkip::dim_alpha(y)))
+            .filter(|(_, alpha)| *alpha > 0.)
+            .collect()
     }
 
     pub fn workspaces_render_geo(&self) -> impl Iterator<Item = Rectangle<f64, Logical>> {
@@ -1652,9 +1869,23 @@ impl<W: LayoutElement> Monitor<W> {
         let first_ws_y = -self.workspace_render_idx() * ws_height_with_gap;
         let first_ws_y = round_logical_in_physical(scale, first_ws_y);
 
+        let skip_ys = self
+            .workspace_switch_skip()
+            .map(|skip| self.skip_item_positions(skip));
+
         // Return position for one-past-last workspace too.
         (0..=self.workspaces.len()).map(move |idx| {
-            let y = first_ws_y + idx as f64 * ws_height_with_gap;
+            let y = match &skip_ys {
+                Some(ys) => {
+                    // Workspaces that aren't a part of the switch are far away, out of view.
+                    let y = ys
+                        .iter()
+                        .find(|(i, _)| *i == idx)
+                        .map_or(1e6, |(_, y)| y * ws_height_with_gap);
+                    round_logical_in_physical(scale, y)
+                }
+                None => first_ws_y + idx as f64 * ws_height_with_gap,
+            };
             let loc = Point::from((0., y)) + static_offset;
 
             // Even though all components that go into loc are rounded to physical pixels, the
@@ -1941,6 +2172,23 @@ impl<W: LayoutElement> Monitor<W> {
                     }
                 },
             );
+        }
+
+        // Darken the workspaces that are moved out, to go with the skipped workspaces in between.
+        // This goes over the workspace contents, but under the pinned scratchpad windows.
+        let dimming = self.skip_dimming();
+        if !dimming.is_empty() {
+            let geos: Vec<_> = self.workspaces_render_geo().collect();
+            for (idx, alpha) in dimming {
+                let elem = SolidColorRenderElement::from_buffer(
+                    &self.skip_dim_buffer,
+                    Point::default(),
+                    alpha,
+                    Kind::Unspecified,
+                );
+                let elem = MonitorInnerRenderElement::SolidColor(elem);
+                push(scale_relocate(geos[idx], elem));
+            }
         }
 
         // Draw in passes for correct Z ordering during window movement between workspaces:
@@ -2379,6 +2627,19 @@ impl<W: LayoutElement> Monitor<W> {
 
             assert!(before_idx < self.workspaces.len());
             assert!(after_idx < self.workspaces.len());
+        }
+
+        if let Some(WorkspaceSwitch::Skip(skip)) = &self.workspace_switch {
+            assert!(skip.target_idx >= 0.);
+            assert!((skip.target_idx as usize) < self.workspaces.len());
+            assert_eq!(skip.target_idx as usize, self.active_workspace_idx);
+
+            // The target is always one of the items, and nothing's shown twice.
+            let target_id = self.workspaces[skip.target_idx as usize].id();
+            assert!(skip.items.iter().any(|item| item.id == target_id));
+            for (i, item) in skip.items.iter().enumerate() {
+                assert!(skip.items[i + 1..].iter().all(|other| other.id != item.id));
+            }
         }
 
         assert!(
