@@ -932,7 +932,7 @@ M5a 补充说明：
 - 反向验证（逐个去掉后确认对应用例失败，再从 git 还原）：`window_under` 钉住分支与 `skip_scratchpad`、`resize_edges_under` 钉住分支与 `skip_scratchpad`、拖动起点、pin geo 的 Overview 条件、P3、P4、P5 两处、`move_workspace_to_idx` 的上游修复与跟随兜底（只撤修复时兜底掩盖了暂存窗口用例，需两者都撤才失败）。working area 换算的反向验证不失败，由此发现 F17。
 - 未被用例覆盖：渲染本身（F16，无渲染器），包括 Pinned 渲染遍、渲染元素更新不受剔除影响、xray 位置。由嵌套截图验证。
 - 嵌套 niri（`animations { slowdown 10; }`，scale 1.5，ghostty，经 IPC 驱动）：键盘切换过程中截图 5 张，屏幕其余部分在变，暂存窗口区域与静止时逐像素相同（唯一差异是终端文本光标闪烁）。日志无 ERROR、无 panic。未做（需人工）：触控板手势、Overview 中的滑入与交接、多显示器插拔与 `move-workspace-to-monitor`。
-- 提交历史：`8e0ad0dd` 加入的换算随后由 `c3c37d53` 删除，打包前可用 fixup 合并（待用户决定）。
+- 提交历史：`8e0ad0dd` 加入的换算随后由 `c3c37d53` 删除。2026-10-06 用户决定不合并：两者如实记录“按原设计实现 → 反向验证发现 F17 → 删除”，合并需拆分 `c3c37d53`（测试部分属于其后的 `213bcd84`）并改写其后约 25 个提交的哈希。留待以后整理上游提交时一并处理（同类整理项：M1b 的 `source_workspace` 可简化为 `WorkspaceId`）。
 - 日常使用反馈：正常。
 
 M5b 补充说明：
