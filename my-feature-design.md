@@ -98,7 +98,7 @@
 | D8 | 显示中的窗口被拖到别处 | 落点是某显示器活动工作区的浮动层时，保留暂存身份；其余情况退出暂存区（§4.5.5） |
 | D9 | 隐藏队列持久化 | 不保留 |
 | D10 | 子窗口策略 | 有可见子窗口时拒绝隐藏；隐藏窗口出现新子窗口时先呈现父窗口（§4.6） |
-| D11 | 取消映射后再映射 | 取消映射即退出暂存区；再映射按普通新窗口处理（v1） |
+| D11 | 取消映射后再映射 | **M6 改写**：取消映射即退出暂存区；若取消映射前在暂存区（Hidden 或 Shown），再映射时作为 Shown 呈现在当前活动显示器的活动工作区（优先于 `open-in-scratchpad true`，`open-in-scratchpad false` 可退出；带 parent 的窗口、无输出时见 §10.5）。v1–M5b 曾为“再映射按普通新窗口处理” |
 | D12 | 首次暂存尺寸 | 历史浮动尺寸 → 窗口规则 `default-column-width/default-window-height` → 工作区 60%×60%（§4.5.1） |
 | D13 | `scratchpad-show` 同时给 `--id` 和 `--app-id` | 视为错误，IPC 返回错误信息 |
 | D14 | `focus-window-previous` 是否会选中隐藏窗口 | 不会：候选中排除隐藏窗口（§4.8.1，M2b 后确认） |
@@ -859,6 +859,7 @@ fi
 | M4 | ✅ 2026-10-05 | `a6437a0a` 单一出口重构、`c95a2c1f` `scratchpad_follow()`、`bb6a3713` 调用点、`386fe373` 不变量 4、`81c67779` 测试、`ac32e72f` 激活不被抢焦点、`8b9d6850` 其测试、`659a6cd6` 客户端 enter/leave 测试、`58abd90d` wiki；文档 `43676d17` `c8f1b387` `eb8dc0a8` | `cargo test --all` 283 / 0 失败（niri lib 260）；慢测试 158；`random_operations_dont_panic` 13 轮 × 5000 cases 无 panic；layout `scratchpad.rs` 24 个用例、`src/tests/scratchpad.rs` 10 个用例 |
 | M5a | ✅ 2026-10-06 | `9da35e66` 提取 static offset、`2a4d36ca` 钉住渲染、`80d3a0dc` 钉住命中、`8e0ad0dd` 跟随保持屏幕位置（换算部分随后由 `c3c37d53` 删除）、`591db6ec` Overview 中滑入（P3）、`b74cdcfa` Overview 交接（P4）、`256826d6` 工作区离开显示器时留下（P5）、`213bcd84` 测试、`4a4be535` wiki；M4 遗留修复 `9de6e32d` `6c2cba42` `02493b09`；文档 `65a1bc45` `b1f8899e` `d846c86d` | `cargo test --all` 295 / 0 失败（niri lib 272）；慢测试 168；`random_operations_dont_panic` 20 轮 × 5000 cases（修复前 10 轮中 4 轮失败，修复后 10 轮无 panic）；layout `scratchpad.rs` 33 个用例、`src/tests/scratchpad.rs` 12 个用例 |
 | M5b | ✅ 2026-10-06 | `f1fdcfeb` 记录与簿记、`a59e32b6` 渲染与快照钩子、`f6fbf9f2` 不可见时不创建记录、`4d80ef8b` 从进度呈现与规则 3 动画、`8ab7fc0a` 测试、`dda0f970` wiki；文档 `dbacfe8a` `13945c80` `5ac7823a` `90811791` | `cargo test --all` 302 / 0 失败（niri lib 279）；慢测试 175；`random_operations_dont_panic` 26 轮 × 5000 cases 无 panic；layout `scratchpad.rs` 40 个用例、`src/tests/scratchpad.rs` 12 个用例（未变） |
+| M6 | ✅ 2026-10-06 | `8fa7b7c5` 配置、`7710c6fb` `move_new_window_to_scratchpad`、`db7eca1f` 映射钩子、`30dc2a0c` 布局测试、`0af0ec51` `24833f68` 客户端测试、`c29c7683` 删除误提交的 pending 快照、`e58330a1` 再映射保留身份、`959f26dd` 再映射测试、`2b2ce87d` wiki；文档 `429256ee` | `cargo test --all` 319 / 0 失败（niri lib 296，按 HEAD 推算，见下）；`random_operations_dont_panic` 6 轮 × 5000 + 1 轮 10000 cases 无 panic；layout `scratchpad.rs` 46 个用例、`src/tests/scratchpad.rs` 23 个用例 |
 
 M1b 补充说明：
 
@@ -945,6 +946,18 @@ M5b 补充说明：
 - 随机测试命中（临时插桩，10000 cases）：创建记录 147 次、从进度呈现 18 次、`set_output()` 释放 2 次、收起中关窗 1 次。
 - 嵌套 niri（`animations { slowdown 10; }`，scale 1.5，ghostty，经 IPC 驱动，PIL 测外接框与平均色差）：收起时窗口以中心缩到 0.5 倍并淡出（中心 599 → 600），内容为窗口快照；收起中途呈现，外接框 580×386 → 596×396 后连续增大，无跳变；呈现中途隐藏，634×422 → 636×422 后连续缩小；平铺窗口在平铺位置收起。日志无 ERROR、WARN、panic。未做（需人工）：规则 3（需两块显示器）、Overview 中收起、custom-shader、录屏中的屏蔽内容、真实弹出菜单进入快照。
 - 未被用例覆盖：渲染与快照本身（F16），包括 niri 层第 0 步、按 RenderTarget 选内容、xray 位置。
+
+M6 补充说明：
+
+- 设计取舍 P9–P14 均按推荐项（§10.10）。实现与 §10 一致，无偏离。
+- 实现：`Layout::move_to_scratchpad` 拆出 `scratchpad_hide(id, animate)`；`move_new_window_to_scratchpad(id, show)`；`compositor.rs` 映射处按 `(was_in_scratchpad, open_in_scratchpad)` 决定（§10.5 的表），要进暂存区的窗口用 `ActivateWindow::No` 添加；`Unmapped.was_in_scratchpad` 在取消映射处由 `mapped.scratchpad_state()` 记录。生产代码约 60 行。
+- 用例对照（§10.8）：L1/L2 `new_window_hides_without_trace`、L3 `new_window_shown_in_scratchpad`、L4 `new_floating_window_keeps_geometry_in_scratchpad`、L5 `new_window_hidden_on_empty_workspace`、L6 `new_window_hides_without_moving_view`、L7/L8 `new_window_in_scratchpad_does_not_activate_output`；C1/C2 `open_in_scratchpad_rule`、C3 `rules_do_not_flip_scratchpad_state`、C4 `is_in_scratchpad_matcher`、C5 `open_in_scratchpad_ignored_for_dialogs`、IPC `open_in_scratchpad_ipc_starts_hidden`、浮动位置 `open_in_scratchpad_floating_window_shows_where_it_opened`、`open_in_scratchpad_does_not_activate_output`、C6/C7 `remapped_window_is_shown_in_scratchpad` + `remapped_window_respects_open_focused`、C8 `remapped_window_and_open_in_scratchpad_rule`、C9 `remapped_window_without_outputs_stays_hidden`。M3 用例 `unmap_hidden_window` 的第二段期望值按 D11 新版改变（Shown，预期变化）。期望值均先手算；失败的 3 处都是测试假设错误：空工作区清理要等切换动画结束（L5）、`open-focused false` 的窗口无焦点，无 id 动作作用到别的窗口（两个再映射用例）；行为期望未改。
+- 随机测试：新增 Op `AddWindowToScratchpad`，临时插桩 10000 cases 命中约 3500 次（`show` 三种取值各有、输出数 0–4 都有），无 panic。
+- 反向验证（逐个去掉后确认对应用例失败，再还原）：`ActivateWindow::No`（先只有布局用例能抓到，客户端用例原先抓不到：Smart 本来就不切显示器，补了 `open-focused true` 的 `open_in_scratchpad_does_not_activate_output` 才抓到）、`animate = false`、`parent.is_none()`（原先的 sed 没有匹配，重做后抓到）、`is_in_scratchpad` 匹配器、`was_in_scratchpad` 赋值、显式 `false` 退出、Shown 优先于规则、Shown 的激活取值。
+- 嵌套 niri（`animations { slowdown 10; }`，ghostty，经 IPC 驱动，从独立 worktree 构建以避开工作树里的其他未提交改动）：`open-in-scratchpad` + `open-floating` 规则的窗口映射即隐藏、普通窗口保持焦点；连续 14 张截图与基线比较只有终端光标闪烁的区域在变（无闪现）；第二个同类窗口同样隐藏；`scratchpad-show --app-id` 呈现，`is-in-scratchpad` 规则的红色边框出现、位置为 `default-floating-position` 的 (50, 50) 逻辑像素；`remove-window-from-scratchpad` 后边框消失。日志无 ERROR、WARN、panic。未做：再映射（需要客户端主动取消映射，由 C6–C9 覆盖）、多显示器。
+- 事故：`git add -A` 误提交了两个 insta `.pending-snap` 文件（`30dc2a0c`、`0af0ec51`），已由 `c29c7683` 删除；用 `filter-branch` 改写历史被拒绝，按用户决定留到最后统一整理。同类整理项：M5a 的 `8e0ad0dd`/`c3c37d53`、M1b 的 `source_workspace`、这两个提交。此后只按文件名提交。
+- 测试数说明：工作树里另有用户未提交的改动（`monitor.rs`、`tests/animations.rs`，工作区切换跳过动画），使工作区内 `cargo test` 报 300；上表按 HEAD 推算（基线 279 + 新增 17）。
+- 未被用例覆盖：日常使用中的真实托盘程序再映射（KeePassXC 等）。
 
 ---
 
