@@ -1143,13 +1143,22 @@ pub struct HidingWindow<Id> {
 
 **创建**（`Layout::move_to_scratchpad`，`remove_tile` 之前取位置与尺寸）：源工作区是其显示器的活动工作区、有输出、window-open 未关闭时创建；`v0` = Tile 正在进行的开窗动画进度（`clamped_value`），否则 1。按 `--id` 隐藏非活动工作区上的窗口、无输出时都不创建。
 
-**快照**：布局层不碰 GPU。niri 层 `State::on_window_hidden_to_scratchpad()` 新增第 0 步（在清可见性缓存、关闭弹出菜单之前）：调用现有 `State::store_unmap_snapshot(window, output)`，`output` 取记录所在显示器；`Layout::store_unmap_snapshot()` 增加分支：窗口是隐藏窗口且有无快照的记录时，用隐藏 Tile 的 `render_snapshot()`（改为 `pub(super)`）按记录位置生成快照填入记录。
+**快照**：布局层不碰 GPU。niri 层 `State::on_window_hidden_to_scratchpad()` 新增第 0 步（在清可见性缓存、关闭弹出菜单之前）：`output` 取自新增的 `Layout::hiding_window_output(&W::Id) -> Option<&Output>`（在各显示器的工作区中按 id 找记录；`find_window_and_output()` 对隐藏窗口返回的输出为 None，不能用）；有输出时调用现有 `State::store_unmap_snapshot(window, Some(output))`，没有记录则跳过本步。`Layout::store_unmap_snapshot()` 增加分支：窗口是隐藏窗口且有无快照的记录时，在 `workspaces_with_render_geo_mut(false)` 中找到记录所在工作区，对隐藏 Tile 先 `update_render_elements(false, Rectangle::new(-record.pos, ws.view_size()))`（与 `Workspace::store_unmap_snapshot_if_empty()` 一致），再用 `render_snapshot()`（改为 `pub(super)`）以 `XrayPos::new(geo.loc, zoom).offset(record.pos)` 生成快照填入记录。
 
-**呈现**（`scratchpad_show`、规则 3（P7）、`remove_from_scratchpad` 的 Hidden 分支、新子窗口呈现父窗口、`activate_window`）：先按 id 从所有工作区删除记录；若 gen 与 Tile 的一致，取其当前 v，开窗动画从 v 开始（新增 `Tile::start_open_animation_from(v)`；`start_open_animation()` 等价于 v = 0）；否则从 0。规则 3 搬动时没有记录，从 0 播。同一帧最多一份呈现。
+- 快照在第 9 步 `stop_all_animations()` 之后生成，拍到的是静止的 Tile，开窗变换不会叠加两次；v0 在此之前记录。记录的快照是 `render_snapshot()` 的返回值，不占 Tile 自己的 unmap 快照槽位，§4.5.1 第 9 步照旧丢弃后者。
+- 记录直接持有 `TileRenderSnapshot`，渲染时按 `RenderTarget` 选出一组内容（选法同 `ClosingWindow::render()`）直接传给 `OpenAnimation::render()`（类型与 `Tile::render()` 开窗分支相同）。与关窗不同，元素在整段动画中被持有，客户端的 wl_buffer 晚一段动画时间才释放（2026-10-06 经用户确认按此实现）。
 
-**释放**：动画结束（`Workspace::advance_animations` 丢弃）；窗口退出（`remove_window_impl` 隐藏分支按 id 删除）；工作区被清理（随工作区丢弃）；`remove_output()`、`add_output()` 迁移的工作区、`move_workspace_to_output_by_id()` 移动的工作区：丢弃其中记录；无输出时（`MonitorSet::NoOutputs`）不应存在记录。
+**呈现**（`scratchpad_show`、规则 3（P7）、`remove_from_scratchpad` 的 Hidden 分支、新子窗口呈现父窗口、`activate_window`）：先按 id 从所有工作区删除记录；若 gen 与 Tile 的一致，取其当前 v，开窗动画从 v 开始（新增 `Tile::start_open_animation_from(v)`；`start_open_animation()` 等价于 v = 0）；否则从 0。规则 3 搬动时没有记录，从 0 播。同一帧最多一份呈现。隐藏队列只有 `remove_window_impl` 与 `scratchpad_show` 两个出口，除规则 3 外的四条呈现路径都经过 `scratchpad_show`，所以实现只改 `scratchpad_show` 与 `scratchpad_bring_to_active_workspace` 两处（M5b 开始时核对）。
 
-**不变量**（加入 `verify_invariants()`）：每条记录的 id 是隐藏窗口且 gen 与该 Tile 的 `scratchpad_hide_gen` 一致；每个 id 至多一条；无输出时没有记录。`are_animations_ongoing()` 包含记录。
+**释放**：动画结束（`Workspace::advance_animations` 丢弃）；窗口退出（`remove_window_impl` 隐藏分支按 id 删除）；工作区被清理（随工作区丢弃；只有记录的工作区按 `has_windows_or_name()` 算作空）；工作区换输出：在 `Workspace::set_output()` 中输出确实改变时清空记录。`remove_output()`（`into_workspaces()` → `set_output(None)`）、`add_output()` 迁移的工作区（`Monitor::new()` → `set_output(Some)`）、`move_workspace_to_output_by_id()`（`remove_workspace_by_idx()` → `set_output(None)`）都经过这里，一处覆盖，无输出时（`MonitorSet::NoOutputs`）也因此不存在记录。
+
+**不变量**（加入 `verify_invariants()`）：每条记录的 id 是隐藏窗口且 gen 与该 Tile 的 `scratchpad_hide_gen` 一致；每个 id 至多一条；无输出时没有记录。`are_animations_ongoing()` 与 `are_transitions_ongoing()` 都包含记录（后者与关窗窗口一致：过渡期间不刷新指针焦点）。
+
+**已知限制**（2026-10-06 经用户确认）：
+
+- 工作区切换动画进行中隐藏（M5a 钉住期间）：窗口原本按钉住位置画，记录在活动工作区的 Normal 层随工作区滑动，画面跳一下；切换中从记录呈现，v 连续但位置跳。仅影响切换动画期间，不处理。
+- 焦点在平铺全屏窗口、浮动层不可见时无收起动画（`render_floating` 提前返回），与关窗动画相同。
+- 平铺窗口首次隐藏时记录在平铺位置与尺寸；收起中途再呈现时 v 连续，但窗口出现在浮动位置。浮动窗口位置也连续。
 
 #### 9.3.3 M5b 测试
 
