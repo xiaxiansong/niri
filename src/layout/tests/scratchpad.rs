@@ -1407,3 +1407,320 @@ fn shown_window_follows_after_moving_workspace_to_first() {
     assert_snapshot!(workspaces(&layout), @"output1: [] *[5] []");
     assert_snapshot!(summary(&layout), @"hidden: [], shown: [5], focus: Some(5)");
 }
+
+/// Options with a linear window opening animation of 100 ms, so that its progress after `t` ms is
+/// `t / 100` when going from 0 to 1.
+fn linear_open_options() -> Options {
+    use niri_config::animations::{Curve, EasingParams, Kind};
+
+    let mut options = Options::default();
+    options.animations.window_open.anim.kind = Kind::Easing(EasingParams {
+        duration_ms: 100,
+        curve: Curve::Linear,
+    });
+    options
+}
+
+/// Windows animating out on all workspaces, with their generation and progress.
+fn hiding(layout: &Layout<TestWindow>) -> String {
+    layout
+        .workspaces()
+        .flat_map(|(_, _, ws)| ws.scratchpad_hiding())
+        .map(|hiding| {
+            format!(
+                "{} gen {} at {:.2}",
+                hiding.id,
+                hiding.gen,
+                hiding.progress()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Progress of the open animation of a window on a workspace.
+fn open_progress(layout: &Layout<TestWindow>, id: usize) -> String {
+    let tile = layout
+        .workspaces()
+        .flat_map(|(_, _, ws)| ws.tiles())
+        .find(|tile| tile.window().0.id == id)
+        .unwrap();
+    match tile.open_animation_progress() {
+        Some(progress) => format!("{progress:.2}"),
+        None => String::from("none"),
+    }
+}
+
+fn advance(msec_delta: i32) -> Op {
+    Op::AdvanceAnimations { msec_delta }
+}
+
+#[test]
+fn hiding_on_active_workspace_animates() {
+    let mut layout = check_ops_with_options(
+        linear_open_options(),
+        [Op::AddOutput(1), floating_window(1), hide(1)],
+    );
+    assert_snapshot!(hiding(&layout), @"1 gen 0 at 1.00");
+    let output = layout.hiding_window_output(&1).map(|output| output.name());
+    assert_snapshot!(format!("{output:?}"), @r#"Some("output1")"#);
+    assert!(layout.are_animations_ongoing(None));
+
+    // The open animation backwards: 1 - 40 / 100.
+    check_ops_on_layout(&mut layout, [advance(40)]);
+    assert_snapshot!(hiding(&layout), @"1 gen 0 at 0.60");
+
+    check_ops_on_layout(&mut layout, [advance(60)]);
+    assert_snapshot!(hiding(&layout), @"");
+    assert_eq!(layout.hiding_window_output(&1), None);
+}
+
+#[test]
+fn hiding_without_animation() {
+    // On an inactive workspace with --id.
+    let layout = check_ops_with_options(
+        linear_open_options(),
+        [
+            Op::AddOutput(1),
+            floating_window(1),
+            Op::FocusWorkspaceDown,
+            window(2, 100),
+            hide(1),
+        ],
+    );
+    assert_snapshot!(summary(&layout), @"hidden: [1], shown: [], focus: Some(2)");
+    assert_snapshot!(hiding(&layout), @"");
+
+    // With the window opening animation off.
+    let mut options = linear_open_options();
+    options.animations.window_open.anim.off = true;
+    let layout = check_ops_with_options(options, [Op::AddOutput(1), floating_window(1), hide(1)]);
+    assert_snapshot!(summary(&layout), @"hidden: [1], shown: [], focus: None");
+    assert_snapshot!(hiding(&layout), @"");
+
+    // With no outputs.
+    let layout = check_ops_with_options(
+        linear_open_options(),
+        [
+            Op::AddOutput(1),
+            floating_window(1),
+            Op::RemoveOutput(1),
+            hide(1),
+        ],
+    );
+    assert_snapshot!(summary(&layout), @"hidden: [1], shown: [], focus: None");
+    assert_snapshot!(hiding(&layout), @"");
+
+    // An inactive tab.
+    let mut layout = check_ops_with_options(
+        linear_open_options(),
+        [
+            Op::AddOutput(1),
+            window(1, 100),
+            window(2, 100),
+            Op::ConsumeOrExpelWindowLeft { id: None },
+            Op::ToggleColumnTabbedDisplay,
+            hide(1),
+        ],
+    );
+    assert_snapshot!(summary(&layout), @"hidden: [1], shown: [], focus: Some(2)");
+    assert_snapshot!(hiding(&layout), @"");
+
+    // The active tab animates. The generation of the first hiding was used up.
+    check_ops_on_layout(&mut layout, [hide(2)]);
+    assert_snapshot!(hiding(&layout), @"2 gen 1 at 1.00");
+
+    // A floating window behind a focused fullscreen window.
+    let layout = check_ops_with_options(
+        linear_open_options(),
+        [
+            Op::AddOutput(1),
+            floating_window(1),
+            window(2, 100),
+            Op::FullscreenWindow(2),
+            Op::Communicate(2),
+            // The floating window shows while the view moves.
+            Op::CompleteAnimations,
+            hide(1),
+        ],
+    );
+    assert_snapshot!(summary(&layout), @"hidden: [1], shown: [], focus: Some(2)");
+    assert_snapshot!(hiding(&layout), @"");
+}
+
+#[test]
+fn showing_while_hiding_continues_from_progress() {
+    let setup = [Op::AddOutput(1), floating_window(1), hide(1), advance(40)];
+
+    let mut layout = check_ops_with_options(linear_open_options(), setup.clone());
+    assert_snapshot!(hiding(&layout), @"1 gen 0 at 0.60");
+    check_ops_on_layout(&mut layout, [toggle()]);
+    assert_snapshot!(hiding(&layout), @"");
+    assert_snapshot!(open_progress(&layout, 1), @"0.60");
+
+    // From 0.6 to 1 in 100 ms: 0.6 + 0.4 * 20 / 100.
+    check_ops_on_layout(&mut layout, [advance(20)]);
+    assert_snapshot!(open_progress(&layout, 1), @"0.68");
+
+    // Activating goes through the same path.
+    let mut layout = check_ops_with_options(linear_open_options(), setup);
+    check_ops_on_layout(&mut layout, [Op::FocusWindow(1)]);
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [1], focus: Some(1)");
+    assert_snapshot!(hiding(&layout), @"");
+    assert_snapshot!(open_progress(&layout, 1), @"0.60");
+}
+
+#[test]
+fn hiding_while_opening_starts_from_progress() {
+    let layout = check_ops_with_options(
+        linear_open_options(),
+        [
+            Op::AddOutput(1),
+            floating_window(1),
+            hide(1),
+            Op::CompleteAnimations,
+            toggle(),
+            advance(30),
+            hide(1),
+        ],
+    );
+    assert_snapshot!(hiding(&layout), @"1 gen 1 at 0.30");
+}
+
+#[test]
+fn hiding_windows_are_released() {
+    // The window is closed.
+    let layout = check_ops_with_options(
+        linear_open_options(),
+        [
+            Op::AddOutput(1),
+            floating_window(1),
+            hide(1),
+            Op::CloseWindow(1),
+        ],
+    );
+    assert_snapshot!(hiding(&layout), @"");
+
+    // The output is removed and the workspace moves to another output.
+    let layout = check_ops_with_options(
+        linear_open_options(),
+        [
+            Op::AddOutput(1),
+            Op::AddOutput(2),
+            Op::FocusOutput(1),
+            window(2, 100),
+            floating_window(1),
+            hide(1),
+            Op::RemoveOutput(1),
+        ],
+    );
+    assert_snapshot!(workspaces(&layout), @"output2: [2] *[]");
+    assert_snapshot!(hiding(&layout), @"");
+
+    // The workspace is cleaned up after switching away from it. The window opening animation is
+    // slower than the workspace switch here.
+    let mut options = linear_switch_options();
+    options.animations.window_open.anim = options.animations.workspace_switch.0;
+    options.animations.workspace_switch.0.kind =
+        niri_config::animations::Kind::Easing(niri_config::animations::EasingParams {
+            duration_ms: 100,
+            curve: niri_config::animations::Curve::Linear,
+        });
+    let mut layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            floating_window(1),
+            hide(1),
+            Op::FocusWorkspaceDown,
+            advance(50),
+        ],
+    );
+    assert_snapshot!(hiding(&layout), @"1 gen 0 at 0.95");
+    check_ops_on_layout(&mut layout, [advance(50)]);
+    assert_snapshot!(workspaces(&layout), @"output1: *[]");
+    assert_snapshot!(hiding(&layout), @"");
+
+    // The workspace is moved to another output.
+    let layout = check_ops_with_options(
+        linear_open_options(),
+        [
+            Op::AddOutput(1),
+            Op::AddOutput(2),
+            Op::FocusOutput(1),
+            window(2, 100),
+            floating_window(1),
+            hide(1),
+            Op::MoveWorkspaceToOutput(2),
+        ],
+    );
+    assert_snapshot!(workspaces(&layout), @"output1: *[]; output2: *[2] []");
+    assert_snapshot!(hiding(&layout), @"");
+
+    // The workspace goes back to its original output when it's added.
+    let layout = check_ops_with_options(
+        linear_open_options(),
+        [
+            Op::AddOutput(1),
+            window(1, 100),
+            Op::AddOutput(2),
+            Op::FocusOutput(2),
+            window(3, 100),
+            floating_window(2),
+            Op::RemoveOutput(2),
+            Op::FocusWorkspace(1),
+            hide(2),
+            Op::AddOutput(2),
+        ],
+    );
+    assert_snapshot!(workspaces(&layout), @"output1: *[1] []; output2: *[3] []");
+    assert_snapshot!(hiding(&layout), @"");
+}
+
+#[test]
+fn hide_show_hide_has_one_hiding_window() {
+    let layout = check_ops_with_options(
+        linear_open_options(),
+        [
+            Op::AddOutput(1),
+            floating_window(1),
+            hide(1),
+            advance(40),
+            toggle(),
+            // From 0.6 to 1: 0.6 + 0.4 * 50 / 100.
+            advance(50),
+            hide(1),
+        ],
+    );
+    assert_snapshot!(hiding(&layout), @"1 gen 1 at 0.80");
+}
+
+#[test]
+fn shown_window_brought_over_animates() {
+    let mut layout = check_ops_with_options(
+        linear_open_options(),
+        [
+            Op::AddOutput(1),
+            Op::AddOutput(2),
+            Op::FocusOutput(1),
+            window(1, 100),
+            floating_window(2),
+            hide(2),
+            toggle(),
+            Op::CompleteAnimations,
+            Op::FocusOutput(2),
+        ],
+    );
+    assert_snapshot!(open_progress(&layout, 2), @"none");
+
+    assert_eq!(
+        layout.toggle_scratchpad(|_| true),
+        ScratchpadToggle::Shown(2)
+    );
+    layout.verify_invariants();
+    assert_snapshot!(open_progress(&layout, 2), @"0.00");
+    assert_snapshot!(hiding(&layout), @"");
+
+    check_ops_on_layout(&mut layout, [advance(25)]);
+    assert_snapshot!(open_progress(&layout, 2), @"0.25");
+}
