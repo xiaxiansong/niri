@@ -191,6 +191,14 @@ impl CompositorHandler for State {
                         })
                         .map(|(mapped, _)| mapped.window.clone());
 
+                    // Windows with a parent are dialogs, which we don't hide on their own.
+                    //
+                    // `None` means not in the scratchpad, `Some(None)` hidden,
+                    // `Some(Some(activate))` shown.
+                    let scratchpad: Option<Option<bool>> = (parent.is_none()
+                        && rules.open_in_scratchpad == Some(true))
+                    .then_some(None);
+
                     // The mapped pre-commit hook deals with dma-bufs on its own.
                     self.remove_default_dmabuf_pre_commit_hook(surface);
                     let hook = add_mapped_toplevel_pre_commit_hook(toplevel);
@@ -217,7 +225,13 @@ impl CompositorHandler for State {
                         height,
                         is_full_width,
                         is_floating,
-                        activate,
+                        // Windows going to the scratchpad must not steal the focus or the active
+                        // monitor; they are activated below if needed.
+                        if scratchpad.is_some() {
+                            ActivateWindow::No
+                        } else {
+                            activate
+                        },
                     );
                     let output = output.cloned();
 
@@ -231,6 +245,17 @@ impl CompositorHandler for State {
                         }
                     } else {
                         error!("layout is missing the window that we just added");
+                    }
+
+                    if let Some(show) = scratchpad {
+                        if self
+                            .niri
+                            .layout
+                            .move_new_window_to_scratchpad(&window, show)
+                            && self.niri.layout.is_scratchpad_hidden(&window)
+                        {
+                            self.on_window_hidden_to_scratchpad(&window);
+                        }
                     }
 
                     if let Some(output) = output {

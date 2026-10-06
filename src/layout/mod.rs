@@ -3616,7 +3616,6 @@ impl<W: LayoutElement> Layout<W> {
     /// activated if `show` is `Some(true)`. Without outputs, it stays hidden.
     ///
     /// Returns whether the window is in the scratchpad now.
-    #[allow(dead_code)]
     pub fn move_new_window_to_scratchpad(&mut self, window: &W::Id, show: Option<bool>) -> bool {
         if self.scratchpad_hide(window, false).is_none() {
             return false;
