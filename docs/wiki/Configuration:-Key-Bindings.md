@@ -400,6 +400,11 @@ A window leaves the scratchpad when it is moved to the tiling layout (including 
 When you drag a shown window with the mouse, it stays in the scratchpad if you drop it onto the floating layout of a monitor's active workspace.
 If an application unmaps its window (for example, minimizes it to the tray) and maps it again later, it comes back as a regular window.
 
+Hiding and showing use the [`window-open` animation](./Configuration:-Animations.md#window-open): showing plays it forwards, and hiding plays it backwards, including a `custom-shader` (where `niri_progress` then goes from 1 down to 0).
+Showing a window while it's still animating out, or hiding it while it's still animating in, continues from where the animation is, without a jump.
+Bringing a shown window over from another monitor also plays the `window-open` animation.
+Windows that aren't visible when hidden (on an inactive workspace with `--id`, in an inactive tab, or behind a focused fullscreen window) disappear without an animation, and with `window-open` turned off, hiding and showing are instant.
+
 Shown windows follow the active workspace of their monitor:
 
 - Switching workspaces in any way (binds, gestures, a bar, or focusing a window on another workspace) moves the shown windows to the new active workspace, keeping their stacking order.
@@ -418,6 +423,7 @@ Only when their monitor is disconnected do they move with the workspace to anoth
 Current limitations:
 
 - Dialogs and other child windows of a shown window don't follow it, they stay on the original workspace.
+- Hiding a window during a workspace switch animation makes it animate out with the sliding workspace rather than in place.
 
 Activating a hidden window shows it: for example, clicking it in a taskbar, `focus-window --id`, or an application asking for focus (subject to the `on-xdg-activate` setting).
 When a hidden window opens a dialog, the window is shown first, and the dialog opens next to it.
