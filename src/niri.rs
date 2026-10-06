@@ -1145,6 +1145,11 @@ impl State {
             return;
         };
 
+        // Snapshot the window for its hiding animation while its popups are still there.
+        if let Some(output) = self.niri.layout.hiding_window_output(window).cloned() {
+            self.store_unmap_snapshot(window, Some(&output));
+        }
+
         self.niri
             .stop_casts_for_target(CastTarget::Window { id: id.get() });
 

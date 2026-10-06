@@ -13,12 +13,13 @@ use smithay::desktop::{layer_map_for_output, Window};
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{Logical, Point, Rectangle, Serial, Size, Transform};
+use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size, Transform};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
 
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
 use super::hiding_window::HidingWindow;
+use super::opening_window::OpeningWindowRenderElement;
 use super::scrolling::{
     Column, ColumnWidth, ScrollDirection, ScrollingSpace, ScrollingSpaceRenderElement,
 };
@@ -151,6 +152,7 @@ niri_render_elements! {
     WorkspaceRenderElement<R> => {
         Scrolling = ScrollingSpaceRenderElement<R>,
         Floating = FloatingSpaceRenderElement<R>,
+        Hiding = OpeningWindowRenderElement,
     }
 }
 
@@ -1828,7 +1830,7 @@ impl<W: LayoutElement> Workspace<W> {
 
     pub fn render_floating<R: NiriRenderer>(
         &self,
-        ctx: RenderCtx<R>,
+        mut ctx: RenderCtx<R>,
         xray_pos: XrayPos,
         focus_ring: bool,
         layer: RenderLayer,
@@ -1837,6 +1839,16 @@ impl<W: LayoutElement> Workspace<W> {
     ) {
         if !self.is_floating_visible() && layer != RenderLayer::MovingBetweenWorkspaces {
             return;
+        }
+
+        // Draw the hiding windows on top of the other windows, like the closing windows.
+        if layer.is_normal() {
+            let scale = Scale::from(self.scale.fractional_scale());
+            for hiding in self.scratchpad_hiding.iter().rev() {
+                if let Some(elem) = hiding.render(ctx.as_gles(), scale) {
+                    push(elem.into());
+                }
+            }
         }
 
         let view_rect = Rectangle::from_size(self.view_size);
@@ -1905,6 +1917,35 @@ impl<W: LayoutElement> Workspace<W> {
                 return;
             }
         }
+    }
+
+    /// Stores the snapshot of a hidden tile for its hiding animation on this workspace.
+    pub fn store_scratchpad_hiding_snapshot(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        xray: Option<&mut Xray>,
+        xray_has_blocked_out_layers: bool,
+        xray_pos: XrayPos,
+        tile: &mut Tile<W>,
+    ) {
+        let Some(hiding) = self
+            .scratchpad_hiding
+            .iter_mut()
+            .find(|hiding| hiding.id == *tile.window().id())
+        else {
+            return;
+        };
+        if hiding.has_snapshot() {
+            return;
+        }
+
+        let tile_pos = hiding.pos();
+        let view_pos = Point::from((-tile_pos.x, -tile_pos.y));
+        let view_rect = Rectangle::new(view_pos, self.view_size);
+        tile.update_render_elements(false, view_rect);
+        let xray_pos = xray_pos.offset(tile_pos);
+        let snapshot = tile.render_snapshot(renderer, xray, xray_has_blocked_out_layers, xray_pos);
+        hiding.set_snapshot(snapshot);
     }
 
     pub fn clear_unmap_snapshot(&mut self, window: &W::Id) {

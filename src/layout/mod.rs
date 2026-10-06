@@ -3649,6 +3649,12 @@ impl<W: LayoutElement> Layout<W> {
         ws.set_fullscreen(&id, false);
         ws.set_maximized(&id, false);
 
+        let tile_geo = ws
+            .tiles_with_render_positions()
+            .find(|(tile, _, _)| *tile.window().id() == id)
+            .map(|(tile, pos, _)| (pos, tile.tile_size()))
+            .unwrap();
+
         let RemovedTile {
             mut tile,
             is_floating,
@@ -3691,7 +3697,9 @@ impl<W: LayoutElement> Layout<W> {
                 0.,
                 tile.options().animations.window_open.anim,
             );
-            ws.add_scratchpad_hiding(HidingWindow::new(id.clone(), gen, anim));
+            let (pos, tile_size) = tile_geo;
+            let hiding = HidingWindow::new(id.clone(), gen, anim, pos, tile_size);
+            ws.add_scratchpad_hiding(hiding);
         }
         tile.scratchpad_hide_gen = hide_gen;
 
@@ -3722,6 +3730,17 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         Some(id)
+    }
+
+    /// Returns the output where the hidden scratchpad window is animating out, if any.
+    pub fn hiding_window_output(&self, window: &W::Id) -> Option<&Output> {
+        self.monitors()
+            .find(|mon| {
+                mon.workspaces
+                    .iter()
+                    .any(|ws| ws.scratchpad_hiding().iter().any(|h| h.id == *window))
+            })
+            .map(|mon| &mon.output)
     }
 
     pub fn is_scratchpad_hidden(&self, window: &W::Id) -> bool {
@@ -5508,6 +5527,32 @@ impl<W: LayoutElement> Layout<W> {
         let _span = tracy_client::span!("Layout::store_unmap_snapshot");
 
         let zoom = self.overview_zoom();
+
+        // Hidden scratchpad windows get their snapshot for the hiding animation.
+        if let Some(tile) = self
+            .scratchpad
+            .hidden
+            .iter_mut()
+            .find(|tile| tile.window().id() == window)
+        {
+            if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
+                for mon in monitors {
+                    for (ws, geo) in mon.workspaces_with_render_geo_mut(false) {
+                        if ws.scratchpad_hiding().iter().any(|h| h.id == *window) {
+                            ws.store_scratchpad_hiding_snapshot(
+                                renderer,
+                                xray,
+                                xray_has_blocked_out_layers,
+                                XrayPos::new(geo.loc, zoom),
+                                tile,
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+            return;
+        }
 
         if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
             if move_.tile.window().id() == window {
