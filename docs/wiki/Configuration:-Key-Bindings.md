@@ -398,7 +398,8 @@ So, there can be several scratchpad windows shown at the same time.
 
 A window leaves the scratchpad when it is moved to the tiling layout (including through fullscreen or maximize), moved to another workspace or monitor, or closed.
 When you drag a shown window with the mouse, it stays in the scratchpad if you drop it onto the floating layout of a monitor's active workspace.
-If an application unmaps its window (for example, minimizes it to the tray) and maps it again later, it comes back as a regular window.
+If an application unmaps its window (for example, minimizes it to the tray) and maps it again later, a window that was in the scratchpad comes back shown on the active workspace of the focused monitor.
+Windows can also start out in the scratchpad with the [`open-in-scratchpad` window rule](./Configuration:-Window-Rules.md#open-in-scratchpad).
 
 Hiding and showing use the [`window-open` animation](./Configuration:-Animations.md#window-open): showing plays it forwards, and hiding plays it backwards, including a `custom-shader` (where `niri_progress` then goes from 1 down to 0).
 Showing a window while it's still animating out, or hiding it while it's still animating in, continues from where the animation is, without a jump.

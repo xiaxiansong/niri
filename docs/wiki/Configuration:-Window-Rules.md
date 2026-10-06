@@ -36,6 +36,7 @@ window-rule {
     match is-floating=true
     match is-window-cast-target=true
     match is-urgent=true
+    match is-in-scratchpad=true
     match at-startup=true
 
     // Properties that apply once upon window opening.
@@ -48,6 +49,7 @@ window-rule {
     open-fullscreen true
     open-floating true
     open-focused false
+    open-in-scratchpad true
 
     // Properties that apply continuously.
     draw-border-with-background false
@@ -322,6 +324,28 @@ window-rule {
 }
 ```
 
+#### `is-in-scratchpad`
+
+<sup>Since: next release</sup>
+
+Can be `true` or `false`.
+Matches windows in the [scratchpad](./Configuration:-Key-Bindings.md#move-window-to-scratchpad-scratchpad-show-remove-window-from-scratchpad), both hidden and shown ones.
+
+> [!NOTE]
+> This matcher will apply only after the window is already open.
+> This means that you cannot use it to change the window opening properties like `default-window-height` or `open-in-scratchpad`.
+
+Changing the rules of a window when it enters or leaves the scratchpad never moves it in or out of the scratchpad by itself.
+
+```kdl
+// Make shown scratchpad windows semitransparent.
+window-rule {
+    match is-in-scratchpad=true
+
+    opacity 0.9
+}
+```
+
 #### `at-startup`
 
 <sup>Since: 0.1.6</sup>
@@ -531,6 +555,41 @@ window-rule {
     open-focused true
 }
 ```
+
+#### `open-in-scratchpad`
+
+<sup>Since: next release</sup>
+
+Move the window to the scratchpad, hidden, right after it opens.
+Use [`scratchpad-show`](./Configuration:-Key-Bindings.md#move-window-to-scratchpad-scratchpad-show-remove-window-from-scratchpad) to show it.
+
+The window doesn't take the focus when it opens, even with `open-focused true`.
+It is never shown on screen before it is hidden, so there is no flash.
+Since a hidden window is not on any workspace, `open-fullscreen` and `open-maximized` have no lasting effect on it.
+The first time it is shown, a window that opened tiled gets the size from `default-column-width` and `default-window-height`, or 60% of the working area.
+A window that opened floating keeps the size and position it opened with, so you can combine this rule with `open-floating`, `default-column-width`, `default-window-height` and `default-floating-position` to choose where a drop-down terminal appears.
+
+```kdl
+// Start the drop-down terminal hidden, and show it with a bind.
+// Example bind: Mod+Grave { scratchpad-show app-id="^dropdown$"; }
+window-rule {
+    match app-id="^dropdown$"
+
+    open-in-scratchpad true
+    open-floating true
+    default-column-width { proportion 0.8; }
+    default-window-height { proportion 0.5; }
+    default-floating-position x=0 y=0 relative-to="top"
+}
+```
+
+Windows that open with a parent window (usually dialogs) ignore this rule.
+If a window was in the scratchpad when it unmapped, it is shown in the scratchpad again when it maps, even if this rule is `true`, so that for example showing the window from a tray icon works.
+Setting this rule to `false` for such a window makes it open as a regular window instead.
+
+> [!NOTE]
+> When the window opens on the last workspace of a monitor, niri adds an empty workspace below it as usual, and it stays after the window is hidden, as it would if you closed the window.
+> It goes away when you switch away from that workspace.
 
 ### Dynamic Properties
 
