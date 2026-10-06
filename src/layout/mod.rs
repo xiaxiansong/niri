@@ -3649,11 +3649,13 @@ impl<W: LayoutElement> Layout<W> {
         ws.set_fullscreen(&id, false);
         ws.set_maximized(&id, false);
 
-        let tile_geo = ws
+        let (pos, tile_size, visible) = ws
             .tiles_with_render_positions()
             .find(|(tile, _, _)| *tile.window().id() == id)
-            .map(|(tile, pos, _)| (pos, tile.tile_size()))
+            .map(|(tile, pos, visible)| (pos, tile.tile_size(), visible))
             .unwrap();
+        // Don't animate a window that wasn't visible, like an inactive tab.
+        let hide_gen = hide_gen.filter(|_| visible);
 
         let RemovedTile {
             mut tile,
@@ -3697,7 +3699,6 @@ impl<W: LayoutElement> Layout<W> {
                 0.,
                 tile.options().animations.window_open.anim,
             );
-            let (pos, tile_size) = tile_geo;
             let hiding = HidingWindow::new(id.clone(), gen, anim, pos, tile_size);
             ws.add_scratchpad_hiding(hiding);
         }
