@@ -35,6 +35,8 @@ pub struct WindowRule {
     #[knuffel(child, unwrap(argument))]
     pub open_focused: Option<bool>,
     #[knuffel(child, unwrap(argument))]
+    pub open_in_scratchpad: Option<bool>,
+    #[knuffel(child, unwrap(argument))]
     pub on_xdg_activate: Option<OnXdgActivate>,
 
     // Rules applied dynamically.
@@ -139,6 +141,8 @@ pub struct Match {
     pub is_window_cast_target: Option<bool>,
     #[knuffel(property)]
     pub is_urgent: Option<bool>,
+    #[knuffel(property)]
+    pub is_in_scratchpad: Option<bool>,
     #[knuffel(property)]
     pub at_startup: Option<bool>,
 }

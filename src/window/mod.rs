@@ -14,6 +14,7 @@ use smithay::wayland::shell::xdg::{
     SurfaceCachedState, ToplevelSurface, XdgToplevelSurfaceRoleAttributes,
 };
 
+use crate::layout::{LayoutElement as _, ScratchpadState};
 use crate::utils::with_toplevel_role;
 
 pub mod mapped;
@@ -72,6 +73,11 @@ pub struct ResolvedWindowRules {
 
     /// Whether the window should open focused.
     pub open_focused: Option<bool>,
+
+    /// Whether the window should open in the scratchpad.
+    ///
+    /// Only read when the window maps.
+    pub open_in_scratchpad: Option<bool>,
 
     /// What to do on xdg-activation requests.
     pub on_xdg_activate: Option<OnXdgActivate>,
@@ -183,6 +189,15 @@ impl<'a> WindowRef<'a> {
             WindowRef::Mapped(mapped) => mapped.is_window_cast_target(),
         }
     }
+
+    pub fn is_in_scratchpad(self) -> bool {
+        match self {
+            // Like is-floating, this makes a cycle with the open-in-scratchpad rule, so it cannot
+            // be used for initial configure rules.
+            WindowRef::Unmapped(_) => false,
+            WindowRef::Mapped(mapped) => mapped.scratchpad_state() != ScratchpadState::None,
+        }
+    }
 }
 
 impl ResolvedWindowRules {
@@ -261,6 +276,10 @@ impl ResolvedWindowRules {
 
                 if let Some(x) = rule.open_focused {
                     resolved.open_focused = Some(x);
+                }
+
+                if let Some(x) = rule.open_in_scratchpad {
+                    resolved.open_in_scratchpad = Some(x);
                 }
 
                 if let Some(x) = rule.on_xdg_activate {
@@ -454,6 +473,12 @@ fn window_matches(window: WindowRef, role: &XdgToplevelSurfaceRoleAttributes, m:
 
     if let Some(is_window_cast_target) = m.is_window_cast_target {
         if window.is_window_cast_target() != is_window_cast_target {
+            return false;
+        }
+    }
+
+    if let Some(is_in_scratchpad) = m.is_in_scratchpad {
+        if window.is_in_scratchpad() != is_in_scratchpad {
             return false;
         }
     }
