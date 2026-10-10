@@ -268,6 +268,10 @@ impl CompositorHandler for State {
                         {
                             self.on_window_hidden_to_scratchpad(&window);
                         }
+
+                        // A window that comes back shown goes to the active output, which can be
+                        // different from the one it was added on.
+                        self.niri.queue_redraw_all();
                     }
 
                     if let Some(output) = output {
