@@ -76,8 +76,11 @@ pub struct Monitor<W: LayoutElement> {
     pub(super) workspace_switch: Option<WorkspaceSwitch>,
     /// Indication where an interactively-moved window is about to be placed.
     pub(super) insert_hint: Option<InsertHint>,
-    /// Buffer for darkening workspaces during a skipping workspace switch.
-    skip_dim_buffer: SolidColorBuffer,
+    /// Buffers for darkening workspaces during a skipping workspace switch, one per workspace
+    /// since every element needs its own ID for damage tracking.
+    skip_dim_buffers: Vec<SolidColorBuffer>,
+    /// Where to draw the darkening buffers in use, in output coordinates.
+    skip_dim_geos: Vec<Rectangle<f64, Logical>>,
     /// Insert hint element for rendering.
     insert_hint_element: InsertHintElement,
     /// Location to render the insert hint element.
@@ -388,7 +391,8 @@ impl<W: LayoutElement> Monitor<W> {
             active_workspace_idx,
             previous_workspace_id: None,
             insert_hint: None,
-            skip_dim_buffer: SolidColorBuffer::new(view_size, Color32F::BLACK),
+            skip_dim_buffers: Vec::new(),
+            skip_dim_geos: Vec::new(),
             insert_hint_element: InsertHintElement::new(options.layout.insert_hint),
             insert_hint_render_loc: None,
             overview_open: false,
@@ -1284,7 +1288,7 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn update_render_elements(&mut self, is_active: bool) {
-        self.skip_dim_buffer.resize(self.workspace_size(1.));
+        self.update_skip_dimming();
 
         let mut insert_hint_ws_geo = None;
         let insert_hint_ws_id = self
@@ -1895,6 +1899,26 @@ impl<W: LayoutElement> Monitor<W> {
             .collect()
     }
 
+    /// Updates the buffers for darkening workspaces during a skipping workspace switch.
+    fn update_skip_dimming(&mut self) {
+        self.skip_dim_geos.clear();
+
+        let dimming = self.skip_dimming();
+        if dimming.is_empty() {
+            return;
+        }
+
+        let geos: Vec<_> = self.workspaces_render_geo().collect();
+        for (i, (idx, alpha)) in dimming.into_iter().enumerate() {
+            if self.skip_dim_buffers.len() == i {
+                self.skip_dim_buffers.push(SolidColorBuffer::default());
+            }
+            let geo = geos[idx];
+            self.skip_dim_buffers[i].update(geo.size, Color32F::BLACK * alpha);
+            self.skip_dim_geos.push(geo);
+        }
+    }
+
     pub fn workspaces_render_geo(&self) -> impl Iterator<Item = Rectangle<f64, Logical>> {
         let scale = self.scale.fractional_scale();
         let zoom = self.overview_zoom();
@@ -2215,19 +2239,15 @@ impl<W: LayoutElement> Monitor<W> {
 
         // Darken the workspaces that are moved out, to go with the skipped workspaces in between.
         // This goes over the workspace contents, but under the pinned scratchpad windows.
-        let dimming = self.skip_dimming();
-        if !dimming.is_empty() {
-            let geos: Vec<_> = self.workspaces_render_geo().collect();
-            for (idx, alpha) in dimming {
-                let elem = SolidColorRenderElement::from_buffer(
-                    &self.skip_dim_buffer,
-                    Point::default(),
-                    alpha,
-                    Kind::Unspecified,
-                );
-                let elem = MonitorInnerRenderElement::SolidColor(elem);
-                push(scale_relocate(geos[idx], elem));
-            }
+        for (buffer, geo) in zip(&self.skip_dim_buffers, &self.skip_dim_geos) {
+            let elem = SolidColorRenderElement::from_buffer(
+                buffer,
+                Point::default(),
+                1.,
+                Kind::Unspecified,
+            );
+            let elem = MonitorInnerRenderElement::SolidColor(elem);
+            push(scale_relocate(*geo, elem));
         }
 
         // Draw in passes for correct Z ordering during window movement between workspaces:
