@@ -166,6 +166,7 @@ animations {
 
 When switching to a workspace that isn't next to the current one (for example with `focus-workspace`), the workspaces in between are skipped: the two workspaces slide as if they were neighbors, and they are slightly darkened the further they are from the center of the screen.
 Switching again in the middle of such an animation continues smoothly from where it is.
+If the new workspace belongs between the two on screen, the less visible one slides out of view and the new one comes in from under it, so the workspaces always appear in their real order.
 This doesn't apply in the overview, nor to the touchpad gesture.
 
 #### `window-open`

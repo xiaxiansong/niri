@@ -4354,9 +4354,12 @@ impl Niri {
 
                 state.xray.workspaces.clear();
                 let mon = self.layout.monitor_for_output(out).unwrap();
-                for (ws, geo) in mon.workspaces_with_render_geo() {
+                for (ws, geo, clip) in mon.workspaces_with_render_geo_and_clip() {
                     let bg_color = ws.render_background().color();
-                    state.xray.workspaces.push((geo, bg_color));
+                    state
+                        .xray
+                        .workspaces
+                        .push((geo, clip.unwrap_or(geo), bg_color));
                 }
                 state.xray.backdrop_color = state.backdrop_buffer.color();
                 let blur_options = BlurOptions::from(self.config.borrow().blur);
@@ -4637,25 +4640,27 @@ impl Niri {
 
             // Macro instead of closure to avoid borrowing push().
             macro_rules! process {
-                ($geo:expr) => {{
+                ($geo:expr, $clip:expr) => {{
                     &mut |elem| {
-                        if let Some(elem) = scale_relocate_crop(elem, output_scale, zoom, $geo) {
+                        if let Some(elem) =
+                            scale_relocate_crop(elem, output_scale, zoom, $geo, $clip)
+                        {
                             push(elem.into());
                         }
                     }
                 }};
             }
 
-            for (ws, geo) in mon.workspaces_with_render_geo() {
+            for (ws, geo, clip) in mon.workspaces_with_render_geo_and_clip() {
                 let ns = Some(ws.id().get() as usize);
                 let xray_pos = XrayPos::new(geo.loc, zoom);
-                push_popups_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo));
-                push_popups_from_layer!(Layer::Background, ns, xray_pos, process!(geo));
+                push_popups_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo, clip));
+                push_popups_from_layer!(Layer::Background, ns, xray_pos, process!(geo, clip));
             }
 
             mon.render_workspaces(ctx.r(), focus_ring, &mut |elem| push(elem.into()));
 
-            for (ws, geo) in mon.workspaces_with_render_geo() {
+            for (ws, geo, clip) in mon.workspaces_with_render_geo_and_clip() {
                 // The render element namespace. This will be set to the workspace index for
                 // elements duplicated across workspaces (i.e. background and bottom layers) in
                 // order to have their non-xray framebuffer effects separated from each other.
@@ -4666,10 +4671,10 @@ impl Niri {
                 // damage tracker.
                 let ns = Some(ws.id().get() as usize);
                 let xray_pos = XrayPos::new(geo.loc, zoom);
-                push_normal_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo));
-                push_normal_from_layer!(Layer::Background, ns, xray_pos, process!(geo));
+                push_normal_from_layer!(Layer::Bottom, ns, xray_pos, process!(geo, clip));
+                push_normal_from_layer!(Layer::Background, ns, xray_pos, process!(geo, clip));
 
-                process!(geo)(ws.render_background());
+                process!(geo, clip)(ws.render_background());
             }
         }
 
@@ -7186,16 +7191,22 @@ impl ClientData for ClientState {
     fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
 }
 
+/// Places the element on the workspace with geometry `ws_geo`, and crops it to the workspace, or
+/// to `clip` if only that part of the workspace is visible.
 fn scale_relocate_crop<E: Element>(
     elem: E,
     output_scale: Scale<f64>,
     zoom: f64,
     ws_geo: Rectangle<f64, Logical>,
+    clip: Option<Rectangle<f64, Logical>>,
 ) -> Option<CropRenderElement<RelocateRenderElement<RescaleRenderElement<E>>>> {
+    let crop = clip
+        .unwrap_or(ws_geo)
+        .to_physical_precise_round(output_scale);
     let ws_geo = ws_geo.to_physical_precise_round(output_scale);
     let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), zoom);
     let elem = RelocateRenderElement::from_element(elem, ws_geo.loc, Relocate::Relative);
-    CropRenderElement::from_element(elem, output_scale, ws_geo)
+    CropRenderElement::from_element(elem, output_scale, crop)
 }
 
 niri_render_elements! {

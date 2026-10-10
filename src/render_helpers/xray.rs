@@ -27,8 +27,11 @@ pub struct Xray {
     pub background: [Rc<RefCell<EffectBuffer>>; RenderTarget::COUNT],
     pub backdrop: [Rc<RefCell<EffectBuffer>>; RenderTarget::COUNT],
     pub backdrop_color: Color32F,
-    pub workspaces: Vec<(Rectangle<f64, Logical>, Color32F)>,
+    pub workspaces: Vec<XrayWorkspace>,
 }
+
+/// Workspace geometry, its part that isn't covered by other workspaces, and background color.
+pub type XrayWorkspace = (Rectangle<f64, Logical>, Rectangle<f64, Logical>, Color32F);
 
 /// Position for drawing xray background.
 #[derive(Debug, Clone, Copy)]
@@ -134,19 +137,19 @@ impl Xray {
             let clip_geo_size = Vec2::new(clip_geo.size.w as f32, clip_geo.size.h as f32);
             let buf_size = background.logical_size();
 
-            for (ws_geo, bg_color) in &self.workspaces {
+            for (ws_geo, ws_clip, bg_color) in &self.workspaces {
                 // If the background color is opaque, check if the workspace fully covers the
                 // element. In this case, we will skip the backdrop element since it's fully
                 // covered.
                 //
                 // FIXME: also implement some way to check if the background elements are fully
                 // covered in opaque regions, and not just the niri background color is opaque
-                let crop = if bg_color.is_opaque() && ws_geo.contains_rect(geo_in_backdrop) {
+                let crop = if bg_color.is_opaque() && ws_clip.contains_rect(geo_in_backdrop) {
                     skip_backdrop = true;
                     // No need to intersect, we know it's fully covered.
                     Some(geo_in_backdrop)
                 } else {
-                    ws_geo.intersection(geo_in_backdrop)
+                    ws_clip.intersection(geo_in_backdrop)
                 };
 
                 let Some(crop) = crop else {

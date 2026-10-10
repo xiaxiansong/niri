@@ -3,7 +3,6 @@ use std::iter::zip;
 use std::rc::Rc;
 use std::time::Duration;
 
-use arrayvec::ArrayVec;
 use niri_config::{CornerRadius, LayoutPart};
 use smithay::backend::renderer::element::utils::{
     CropRenderElement, Relocate, RelocateRenderElement, RescaleRenderElement,
@@ -80,7 +79,7 @@ pub struct Monitor<W: LayoutElement> {
     /// since every element needs its own ID for damage tracking.
     skip_dim_buffers: Vec<SolidColorBuffer>,
     /// Where to draw the darkening buffers in use, in output coordinates.
-    skip_dim_geos: Vec<Rectangle<f64, Logical>>,
+    pub(super) skip_dim_geos: Vec<Rectangle<f64, Logical>>,
     /// Insert hint element for rendering.
     insert_hint_element: InsertHintElement,
     /// Location to render the insert hint element.
@@ -206,6 +205,14 @@ niri_render_elements! {
 pub type MonitorRenderElement<R> =
     RelocateRenderElement<RescaleRenderElement<MonitorInnerRenderElement<R>>>;
 
+/// A workspace with its render geometry, and the part of it that isn't covered by others if it's
+/// cut off.
+pub type WorkspaceGeoAndClip<'a, W> = (
+    &'a Workspace<W>,
+    Rectangle<f64, Logical>,
+    Option<Rectangle<f64, Logical>>,
+);
+
 /// How much to darken a workspace that is fully moved out, during a skipping workspace switch.
 const SKIP_DIM: f32 = 0.35;
 
@@ -214,31 +221,78 @@ const SKIP_DIM: f32 = 0.35;
 /// Workspaces that aren't next to each other still move like they were: the visible workspaces
 /// and the one we're switching to form a strip that scrolls as a whole. This also lets an
 /// interrupted switch continue from wherever it was, without any jumps.
+///
+/// When an interrupted switch goes to a workspace that belongs between two visible ones, there's
+/// no room for it in the strip. Then the workspaces on one side slide out of view, and the target
+/// comes in from under them. So that the workspaces never overlap, each one has a visible range
+/// that cuts off the part that's covered.
 #[derive(Debug)]
 pub struct WorkspaceSwitchSkip {
     /// Progress of the switch, from 0 to 1.
     anim: Animation,
     /// Workspaces that are shown at some point during the switch.
-    items: ArrayVec<SkipItem, 4>,
-    /// How far the strip moves over the whole switch, in workspace heights.
-    delta: f64,
+    items: Vec<SkipItem>,
     /// Index of the workspace we're switching to.
     target_idx: f64,
 }
 
+/// A value that changes linearly with the progress of a skipping workspace switch.
+#[derive(Debug, Clone, Copy)]
+struct SkipLine {
+    from: f64,
+    delta: f64,
+}
+
+/// A workspace taking part in a skipping workspace switch.
+///
+/// All values are in workspace heights (including the gap) from where the active workspace is at
+/// rest.
 #[derive(Debug, Clone, Copy)]
 struct SkipItem {
     id: WorkspaceId,
-    /// Position at the start, in workspace heights from where the active workspace is at rest.
+    /// Position of the top of the workspace.
+    y: SkipLine,
+    /// Top of the visible range, or negative infinity if not cut off at the top.
+    top: SkipLine,
+    /// Bottom of the visible range, or positive infinity if not cut off at the bottom.
+    bottom: SkipLine,
+}
+
+/// Current position of a [`SkipItem`].
+#[derive(Debug, Clone, Copy)]
+struct SkipPos {
+    /// Index of the workspace.
+    idx: usize,
     y: f64,
+    top: f64,
+    bottom: f64,
+}
+
+impl SkipLine {
+    fn new(from: f64, delta: f64) -> Self {
+        Self { from, delta }
+    }
+
+    fn at(self, progress: f64) -> f64 {
+        // Infinities stay infinite: delta is always finite.
+        self.from + self.delta * progress
+    }
+}
+
+impl SkipPos {
+    /// Visible range of the workspace.
+    fn visible(&self) -> (f64, f64) {
+        (self.y.max(self.top), (self.y + 1.).min(self.bottom))
+    }
+
+    /// How much of the screen the visible range takes up.
+    fn on_screen(&self) -> f64 {
+        let (top, bottom) = self.visible();
+        (bottom.min(1.) - top.max(0.)).max(0.)
+    }
 }
 
 impl WorkspaceSwitchSkip {
-    /// Current position of the item, in workspace heights.
-    fn y(&self, item: &SkipItem) -> f64 {
-        item.y + self.delta * self.anim.value()
-    }
-
     /// How much to darken a workspace at the position: the further it is, the darker.
     fn dim_alpha(y: f64) -> f32 {
         SKIP_DIM * y.abs().min(1.) as f32
@@ -1741,8 +1795,8 @@ impl<W: LayoutElement> Monitor<W> {
         let ws_height_with_gap = self.workspace_size_with_gap(1.).h;
 
         if let Some(skip) = self.workspace_switch_skip() {
-            let positions = self.skip_item_positions(skip);
-            let find = |idx| positions.iter().find(|(i, _)| *i == idx).map(|(_, y)| *y);
+            let positions = self.skip_positions(skip);
+            let find = |idx| positions.iter().find(|pos| pos.idx == idx).map(|pos| pos.y);
             if let (Some(source_y), Some(new_y)) = (find(source_idx), find(new_idx)) {
                 return (source_y - new_y) * ws_height_with_gap;
             }
@@ -1751,23 +1805,30 @@ impl<W: LayoutElement> Monitor<W> {
         ws_height_with_gap * (source_idx as f64 - new_idx as f64)
     }
 
-    /// Workspace indices and positions of the items of a skipping workspace switch.
+    /// Current positions of the items of a skipping workspace switch.
     ///
-    /// Positions are in workspace heights from where the active workspace is at rest. Items whose
-    /// workspace is gone are left out.
-    fn skip_item_positions(&self, skip: &WorkspaceSwitchSkip) -> ArrayVec<(usize, f64), 4> {
+    /// Items whose workspace is gone are left out.
+    fn skip_positions(&self, skip: &WorkspaceSwitchSkip) -> Vec<SkipPos> {
+        let progress = skip.anim.value();
         skip.items
             .iter()
-            .filter_map(|item| Some((self.idx_of_ws(item.id)?, skip.y(item))))
+            .filter_map(|item| {
+                Some(SkipPos {
+                    idx: self.idx_of_ws(item.id)?,
+                    y: item.y.at(progress),
+                    top: item.top.at(progress),
+                    bottom: item.bottom.at(progress),
+                })
+            })
             .collect()
     }
 
     /// Workspace render index that puts the most visible workspace of a skipping switch in place.
     fn skip_render_idx(&self, skip: &WorkspaceSwitchSkip) -> f64 {
-        self.skip_item_positions(skip)
+        self.skip_positions(skip)
             .into_iter()
-            .min_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
-            .map_or(skip.target_idx, |(idx, y)| idx as f64 - y)
+            .max_by(|a, b| a.on_screen().total_cmp(&b.on_screen()))
+            .map_or(skip.target_idx, |pos| pos.idx as f64 - pos.y)
     }
 
     /// Replaces a skipping workspace switch with a regular one, if there is one in progress.
@@ -1804,99 +1865,166 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         // Workspaces that are currently on screen, with their positions.
-        let mut items: ArrayVec<SkipItem, 4> = ArrayVec::new();
-        // Index of the most visible workspace.
-        let center_idx;
+        let mut on_screen: Vec<SkipPos> =
+            if let Some(WorkspaceSwitch::Skip(skip)) = &self.workspace_switch {
+                // Continue from wherever the current skipping switch is.
+                self.skip_positions(skip)
+            } else {
+                let render_idx = self.workspace_render_idx();
+                let first = (render_idx - 1.).floor().max(0.) as usize;
+                let last = ((render_idx + 1.).ceil() as usize).min(self.workspaces.len() - 1);
+                (first..=last)
+                    .map(|idx| SkipPos {
+                        idx,
+                        y: idx as f64 - render_idx,
+                        top: f64::NEG_INFINITY,
+                        bottom: f64::INFINITY,
+                    })
+                    .collect()
+            };
+        on_screen.retain(|pos| pos.on_screen() > 0.);
 
-        if let Some(WorkspaceSwitch::Skip(skip)) = &self.workspace_switch {
-            // Continue from wherever the current skipping switch is.
-            for (idx, y) in self.skip_item_positions(skip) {
-                if y.abs() < 1. {
-                    items.push(SkipItem {
-                        id: self.workspaces[idx].id(),
-                        y,
-                    });
-                }
-            }
+        // This shouldn't happen, but with nothing on screen there's nothing to place the target
+        // next to, so fall back to a regular switch.
+        if on_screen.is_empty() {
+            return None;
+        }
 
-            center_idx = self
-                .skip_item_positions(skip)
-                .into_iter()
-                .min_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))?
-                .0;
-        } else {
-            let render_idx = self.workspace_render_idx();
-
-            let first = (render_idx - 1.).floor().max(0.) as usize;
-            let last = ((render_idx + 1.).ceil() as usize).min(self.workspaces.len() - 1);
-            // The visible workspaces are always contiguous, and there's always at least one.
-            let (mut lowest, mut highest) = (usize::MAX, 0);
-            for idx in first..=last {
-                let y = idx as f64 - render_idx;
-                if y.abs() < 1. {
-                    items.push(SkipItem {
-                        id: self.workspaces[idx].id(),
-                        y,
-                    });
-                    lowest = lowest.min(idx);
-                    highest = highest.max(idx);
-                }
-            }
-
+        if !matches!(self.workspace_switch, Some(WorkspaceSwitch::Skip(_))) {
             // If the target is right next to what's on screen, or to where we're already going,
             // then it's a regular scroll. This makes holding down a key to go through the
             // workspaces one by one look the same as always, even if the view lags behind.
+            let lowest = on_screen.iter().map(|pos| pos.idx).min().unwrap();
+            let highest = on_screen.iter().map(|pos| pos.idx).max().unwrap();
             let near_view = lowest.saturating_sub(1)..=highest + 1;
             let near_target =
                 self.active_workspace_idx.saturating_sub(1)..=self.active_workspace_idx + 1;
             if near_view.contains(&target_idx) || near_target.contains(&target_idx) {
                 return None;
             }
-
-            center_idx = render_idx.round() as usize;
         }
 
-        // This shouldn't happen, but with nothing on screen there's nothing to place the target
-        // next to, so fall back to a regular switch.
-        if items.is_empty() {
-            return None;
-        }
-
-        let target_id = self.workspaces[target_idx].id();
-        let target_y = match items.iter().find(|item| item.id == target_id) {
+        // Find where the target goes: its position, and the part of the screen it takes up now.
+        // Everything above that part ends up above the screen, everything below it below.
+        let target = on_screen.iter().position(|pos| pos.idx == target_idx);
+        let (target_y, boundary_top, boundary_bottom) = match target {
             // Already visible, for example when going back.
-            Some(item) => item.y,
+            Some(i) => {
+                let pos = on_screen.remove(i);
+                let (top, bottom) = pos.visible();
+                (pos.y, top, bottom)
+            }
             None => {
-                // Put the target right next to the visible workspaces, on the side it is on.
-                let y = if target_idx > center_idx {
-                    items.iter().map(|item| item.y).fold(f64::MIN, f64::max) + 1.
-                } else {
-                    items.iter().map(|item| item.y).fold(f64::MAX, f64::min) - 1.
+                // The target goes between its neighbors in the real order, right next to the more
+                // visible one. There's no room for it there, so it comes in from under the less
+                // visible one, which slides out of view at the same time.
+                let above = on_screen
+                    .iter()
+                    .filter(|pos| pos.idx < target_idx)
+                    .max_by_key(|pos| pos.idx);
+                let below = on_screen
+                    .iter()
+                    .filter(|pos| pos.idx > target_idx)
+                    .min_by_key(|pos| pos.idx);
+                let next_to_below = match (above, below) {
+                    (Some(above), Some(below)) => below.on_screen() > above.on_screen(),
+                    (above, _) => above.is_none(),
                 };
-                items.push(SkipItem { id: target_id, y });
-                y
+
+                if next_to_below {
+                    let edge = below.unwrap().visible().0;
+                    (edge - 1., edge, edge)
+                } else {
+                    let edge = above.unwrap().visible().1;
+                    (edge, edge, edge)
+                }
             }
         };
+
+        // How much the parts above and below the target move to leave the screen to the target.
+        let shift_up = -boundary_top;
+        let shift_down = 1. - boundary_bottom;
+
+        let middle = (boundary_top + boundary_bottom) / 2.;
+        let mut items: Vec<_> = on_screen
+            .iter()
+            .map(|pos| {
+                let (top, bottom) = pos.visible();
+                let shift = if (top + bottom) / 2. < middle {
+                    shift_up
+                } else {
+                    shift_down
+                };
+                SkipItem {
+                    id: self.workspaces[pos.idx].id(),
+                    y: SkipLine::new(pos.y, shift),
+                    top: SkipLine::new(pos.top, shift),
+                    bottom: SkipLine::new(pos.bottom, shift),
+                }
+            })
+            .collect();
+
+        // The target moves into place, and its visible part follows the parts around it. It never
+        // shows more than the target itself: its top edge goes down from at most boundary_top at
+        // the same rate as boundary_top does, and the same for the bottom edge.
+        items.push(SkipItem {
+            id: self.workspaces[target_idx].id(),
+            y: SkipLine::new(target_y, -target_y),
+            top: SkipLine::new(boundary_top, shift_up),
+            bottom: SkipLine::new(boundary_bottom, shift_down),
+        });
 
         Some(WorkspaceSwitchSkip {
             anim: Animation::new(self.clock.clone(), 0., 1., 0., config),
             items,
-            delta: -target_y,
             target_idx: target_idx as f64,
         })
     }
 
     /// Workspace indices and how much to darken them, during a skipping workspace switch.
-    pub(super) fn skip_dimming(&self) -> ArrayVec<(usize, f32), 4> {
+    pub(super) fn skip_dimming(&self) -> Vec<(usize, f32)> {
         let Some(skip) = self.workspace_switch_skip() else {
-            return ArrayVec::new();
+            return Vec::new();
         };
 
-        self.skip_item_positions(skip)
+        self.skip_positions(skip)
             .into_iter()
-            .map(|(idx, y)| (idx, WorkspaceSwitchSkip::dim_alpha(y)))
+            .map(|pos| (pos.idx, WorkspaceSwitchSkip::dim_alpha(pos.y)))
             .filter(|(_, alpha)| *alpha > 0.)
             .collect()
+    }
+
+    /// Part of the workspace at `idx` with render geometry `geo` that isn't covered by others.
+    ///
+    /// Returns `None` when nothing covers it, `Some` with an empty rectangle when it's fully
+    /// covered.
+    pub fn workspace_render_clip(
+        &self,
+        idx: usize,
+        geo: Rectangle<f64, Logical>,
+    ) -> Option<Rectangle<f64, Logical>> {
+        let skip = self.workspace_switch_skip()?;
+        let pos = self
+            .skip_positions(skip)
+            .into_iter()
+            .find(|pos| pos.idx == idx)?;
+        if pos.top <= pos.y && pos.y + 1. <= pos.bottom {
+            return None;
+        }
+
+        let scale = self.scale.fractional_scale();
+        let ws_height_with_gap = self.workspace_size_with_gap(1.).h;
+        let offset = self.workspace_static_offset(self.workspace_size(1.)).y;
+        let to_output = |y: f64| round_logical_in_physical(scale, y * ws_height_with_gap) + offset;
+
+        let (top, bottom) = pos.visible();
+        let top = to_output(top).max(geo.loc.y);
+        let bottom = to_output(bottom).min(geo.loc.y + geo.size.h);
+        let height = (bottom - top).max(0.);
+        Some(Rectangle::new(
+            Point::from((geo.loc.x, top)),
+            Size::from((geo.size.w, height)),
+        ))
     }
 
     /// Updates the buffers for darkening workspaces during a skipping workspace switch.
@@ -1909,11 +2037,21 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         let geos: Vec<_> = self.workspaces_render_geo().collect();
-        for (i, (idx, alpha)) in dimming.into_iter().enumerate() {
+        let clips = self.workspace_render_clips();
+        for (idx, alpha) in dimming {
+            // Only darken the part of the workspace that isn't covered.
+            let geo = clips
+                .as_ref()
+                .and_then(|clips| clips[idx])
+                .unwrap_or(geos[idx]);
+            if geo.size.h <= 0. {
+                continue;
+            }
+
+            let i = self.skip_dim_geos.len();
             if self.skip_dim_buffers.len() == i {
                 self.skip_dim_buffers.push(SolidColorBuffer::default());
             }
-            let geo = geos[idx];
             self.skip_dim_buffers[i].update(geo.size, Color32F::BLACK * alpha);
             self.skip_dim_geos.push(geo);
         }
@@ -1934,7 +2072,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         let skip_ys = self
             .workspace_switch_skip()
-            .map(|skip| self.skip_item_positions(skip));
+            .map(|skip| self.skip_positions(skip));
 
         // Return position for one-past-last workspace too.
         (0..=self.workspaces.len()).map(move |idx| {
@@ -1943,8 +2081,8 @@ impl<W: LayoutElement> Monitor<W> {
                     // Workspaces that aren't a part of the switch are far away, out of view.
                     let y = ys
                         .iter()
-                        .find(|(i, _)| *i == idx)
-                        .map_or(1e6, |(_, y)| y * ws_height_with_gap);
+                        .find(|pos| pos.idx == idx)
+                        .map_or(1e6, |pos| pos.y * ws_height_with_gap);
                     round_logical_in_physical(scale, y)
                 }
                 None => first_ws_y + idx as f64 * ws_height_with_gap,
@@ -1978,16 +2116,25 @@ impl<W: LayoutElement> Monitor<W> {
         ))
     }
 
+    /// Parts of the workspaces that aren't covered by others, see
+    /// [`Monitor::workspace_render_clip()`].
+    ///
+    /// Returns `None` when there's no skipping workspace switch, so nothing can be covered.
+    fn workspace_render_clips(&self) -> Option<Vec<Option<Rectangle<f64, Logical>>>> {
+        self.workspace_switch_skip()?;
+        Some(
+            zip(0..self.workspaces.len(), self.workspaces_render_geo())
+                .map(|(idx, geo)| self.workspace_render_clip(idx, geo))
+                .collect(),
+        )
+    }
+
     pub fn workspaces_with_render_geo_cull(
         &self,
         cull: bool,
     ) -> impl Iterator<Item = (&Workspace<W>, Rectangle<f64, Logical>)> {
-        let output_geo = Rectangle::from_size(self.view_size);
-
-        let geo = self.workspaces_render_geo();
-        zip(self.workspaces.iter(), geo)
-            // Cull out workspaces outside the output.
-            .filter(move |(_ws, geo)| !cull || geo.intersection(output_geo).is_some())
+        self.workspaces_with_render_geo_and_clip_cull(cull)
+            .map(|(ws, geo, _clip)| (ws, geo))
     }
 
     pub fn workspaces_with_render_geo(
@@ -1996,15 +2143,41 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspaces_with_render_geo_cull(true)
     }
 
+    /// Like [`Monitor::workspaces_with_render_geo_cull()`], but also returns the part of each
+    /// workspace that isn't covered by others, if it's cut off.
+    pub fn workspaces_with_render_geo_and_clip_cull(
+        &self,
+        cull: bool,
+    ) -> impl Iterator<Item = WorkspaceGeoAndClip<'_, W>> {
+        let output_geo = Rectangle::from_size(self.view_size);
+        let clips = self.workspace_render_clips();
+
+        let geo = self.workspaces_render_geo();
+        zip(self.workspaces.iter().enumerate(), geo)
+            .map(move |((idx, ws), geo)| (ws, geo, clips.as_ref().and_then(|clips| clips[idx])))
+            // Cull out workspaces outside the output.
+            .filter(move |(_ws, geo, clip)| !cull || is_on_output(*geo, *clip, output_geo))
+    }
+
+    pub fn workspaces_with_render_geo_and_clip(
+        &self,
+    ) -> impl Iterator<Item = WorkspaceGeoAndClip<'_, W>> {
+        self.workspaces_with_render_geo_and_clip_cull(true)
+    }
+
     pub fn workspaces_with_render_geo_idx(
         &self,
     ) -> impl Iterator<Item = ((usize, &Workspace<W>), Rectangle<f64, Logical>)> {
         let output_geo = Rectangle::from_size(self.view_size);
+        let clips = self.workspace_render_clips();
 
         let geo = self.workspaces_render_geo();
         zip(self.workspaces.iter().enumerate(), geo)
             // Cull out workspaces outside the output.
-            .filter(move |(_ws, geo)| geo.intersection(output_geo).is_some())
+            .filter(move |((idx, _ws), geo)| {
+                let clip = clips.as_ref().and_then(|clips| clips[*idx]);
+                is_on_output(*geo, clip, output_geo)
+            })
     }
 
     pub fn workspaces_with_render_geo_mut(
@@ -2012,25 +2185,33 @@ impl<W: LayoutElement> Monitor<W> {
         cull: bool,
     ) -> impl Iterator<Item = (&mut Workspace<W>, Rectangle<f64, Logical>)> {
         let output_geo = Rectangle::from_size(self.view_size);
+        let clips = self.workspace_render_clips();
 
-        let geo = self.workspaces_render_geo();
-        zip(self.workspaces.iter_mut(), geo)
+        let geo: Vec<_> = self.workspaces_render_geo().collect();
+        zip(self.workspaces.iter_mut().enumerate(), geo)
             // Cull out workspaces outside the output.
-            .filter(move |(_ws, geo)| !cull || geo.intersection(output_geo).is_some())
+            .filter(move |((idx, _ws), geo)| {
+                let clip = clips.as_ref().and_then(|clips| clips[*idx]);
+                !cull || is_on_output(*geo, clip, output_geo)
+            })
+            .map(|((_idx, ws), geo)| (ws, geo))
     }
 
     pub fn workspace_under(
         &self,
         pos_within_output: Point<f64, Logical>,
     ) -> Option<(&Workspace<W>, Rectangle<f64, Logical>)> {
-        let (ws, geo) = self.workspaces_with_render_geo().find_map(|(ws, geo)| {
-            // Extend width to entire output.
-            let loc = Point::from((0., geo.loc.y));
-            let size = Size::from((self.view_size.w, geo.size.h));
-            let bounds = Rectangle::new(loc, size);
+        let (ws, geo) =
+            self.workspaces_with_render_geo_and_clip()
+                .find_map(|(ws, geo, clip)| {
+                    // Extend width to entire output.
+                    let visible = clip.unwrap_or(geo);
+                    let loc = Point::from((0., visible.loc.y));
+                    let size = Size::from((self.view_size.w, visible.size.h));
+                    let bounds = Rectangle::new(loc, size);
 
-            bounds.contains(pos_within_output).then_some((ws, geo))
-        })?;
+                    bounds.contains(pos_within_output).then_some((ws, geo))
+                })?;
         Some((ws, geo))
     }
 
@@ -2038,8 +2219,11 @@ impl<W: LayoutElement> Monitor<W> {
         &self,
         pos_within_output: Point<f64, Logical>,
     ) -> Option<&Workspace<W>> {
-        self.workspaces_with_render_geo()
-            .find_map(|(ws, geo)| geo.contains(pos_within_output).then_some(ws))
+        self.workspaces_with_render_geo_and_clip()
+            .find_map(|(ws, geo, clip)| {
+                let visible = clip.unwrap_or(geo);
+                visible.contains(pos_within_output).then_some(ws)
+            })
     }
 
     pub fn window_under(&self, pos_within_output: Point<f64, Logical>) -> Option<(&W, HitType)> {
@@ -2289,7 +2473,24 @@ impl<W: LayoutElement> Monitor<W> {
                     )
                 };
 
-            for (ws, geo) in self.workspaces_with_render_geo_cull(cull) {
+            for (ws, geo, clip) in self.workspaces_with_render_geo_and_clip_cull(cull) {
+                // Cut off the part of the workspace covered by others during a skipping switch.
+                // This only happens outside the overview, so there's no zoom to account for.
+                let crop_bounds = match clip {
+                    Some(clip) if cull => {
+                        let top = ((clip.loc.y - geo.loc.y) * scale).round() as i32;
+                        let bottom =
+                            ((clip.loc.y + clip.size.h - geo.loc.y) * scale).round() as i32;
+                        let top = top.max(crop_bounds.loc.y);
+                        let bottom = bottom.min(crop_bounds.loc.y + crop_bounds.size.h);
+                        Rectangle::new(
+                            Point::from((crop_bounds.loc.x, top)),
+                            Size::from((crop_bounds.size.w, (bottom - top).max(0))),
+                        )
+                    }
+                    _ => crop_bounds,
+                };
+
                 // Macro instead of closure because ws and insert hint have different elem types.
                 macro_rules! push {
                     () => {{
@@ -2788,4 +2989,15 @@ impl<W: LayoutElement> Monitor<W> {
             assert_abs_diff_eq!(pos.y, rounded_pos.y, epsilon = 1e-5);
         }
     }
+}
+
+/// Returns whether the workspace with render geometry `geo` and visible part `clip` shows up on the
+/// output.
+fn is_on_output(
+    geo: Rectangle<f64, Logical>,
+    clip: Option<Rectangle<f64, Logical>>,
+    output_geo: Rectangle<f64, Logical>,
+) -> bool {
+    let visible = clip.unwrap_or(geo);
+    visible.size.h > 0. && visible.intersection(output_geo).is_some()
 }

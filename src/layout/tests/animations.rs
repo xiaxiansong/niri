@@ -1596,3 +1596,175 @@ fn repeated_neighbor_switches_are_not_skipping() {
     // All of the workspaces in between were seen on the way.
     check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
 }
+
+/// Indices and visible vertical ranges of the workspaces on screen, from top to bottom.
+fn visible_ranges(layout: &Layout<TestWindow>) -> Vec<(usize, f64, f64)> {
+    let mon = layout.monitors().next().unwrap();
+    let output_h = mon.output().current_mode().unwrap().size.h as f64;
+    let mut ranges: Vec<_> = mon
+        .workspaces_with_render_geo_and_clip()
+        .map(|(ws, geo, clip)| {
+            let visible = clip.unwrap_or(geo);
+            let idx = mon.idx_of_ws(ws.id()).unwrap();
+            (idx, visible.loc.y, visible.loc.y + visible.size.h)
+        })
+        .filter(|(_, top, bottom)| top < bottom && *bottom > 0. && *top < output_h)
+        .collect();
+    ranges.sort_by(|a, b| a.1.total_cmp(&b.1));
+    ranges
+}
+
+/// Checks that the workspaces on screen are in their real order and don't overlap.
+#[track_caller]
+fn assert_in_order_without_overlap(layout: &Layout<TestWindow>) {
+    let ranges = visible_ranges(layout);
+    for pair in ranges.windows(2) {
+        let ((above, _, above_bottom), (below, below_top, _)) = (pair[0], pair[1]);
+        assert!(
+            above < below,
+            "workspace {above} is shown above {below}: {ranges:?}"
+        );
+        assert!(above_bottom <= below_top, "workspaces overlap: {ranges:?}");
+    }
+}
+
+/// Checks that the visible parts of the workspaces on screen didn't move because of `ops`.
+#[track_caller]
+fn assert_ranges_continuous(layout: &mut Layout<TestWindow>, ops: impl IntoIterator<Item = Op>) {
+    let before = visible_ranges(layout);
+    check_ops_on_layout(layout, ops);
+    let after = visible_ranges(layout);
+    assert_eq!(before, after, "visible workspaces jumped");
+}
+
+#[test]
+fn skipping_switch_retargeted_between_visible_late_keeps_order() {
+    // Nearly done going from 0 to 4, with 4 mostly visible and 0 a sliver at the top.
+    let mut layout = set_up_workspaces(6);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(4),
+            Op::AdvanceAnimations { msec_delta: 900 },
+        ],
+    );
+
+    // 3 belongs between 0 and 4. It comes in from under 0, which slides out at the top.
+    assert_ranges_continuous(&mut layout, [Op::FocusWorkspace(3)]);
+    let mut seen = Vec::new();
+    for _ in 0..9 {
+        check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 100 }]);
+        assert_in_order_without_overlap(&layout);
+        let ranges = visible_ranges(&layout);
+        assert!(ranges.iter().all(|(idx, _, _)| [0, 3, 4].contains(idx)));
+        seen.push(ranges.iter().map(|r| r.0).collect::<Vec<_>>());
+    }
+    assert!(seen.contains(&vec![3, 4]), "{seen:?}");
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_eq!(visible_ranges(&layout).len(), 1);
+    assert_eq!(workspace_geos(&layout)[3].loc.y, 0.);
+}
+
+#[test]
+fn skipping_switch_retargeted_between_visible_early_keeps_order() {
+    // Early in going from 0 to 4, with 0 mostly visible and 4 coming in at the bottom.
+    let mut layout = set_up_workspaces(6);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(4),
+            Op::AdvanceAnimations { msec_delta: 300 },
+        ],
+    );
+
+    // 3 comes in from under 4, which slides back out at the bottom.
+    assert_ranges_continuous(&mut layout, [Op::FocusWorkspace(3)]);
+    check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 500 }]);
+    let ranges = visible_ranges(&layout);
+    assert_eq!(ranges.iter().map(|r| r.0).collect::<Vec<_>>(), [0, 3, 4]);
+    assert_in_order_without_overlap(&layout);
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_eq!(workspace_geos(&layout)[3].loc.y, 0.);
+}
+
+#[test]
+fn covered_part_of_workspace_is_not_hit() {
+    let mut layout = set_up_workspaces(6);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(4),
+            Op::AdvanceAnimations { msec_delta: 300 },
+            Op::FocusWorkspace(3),
+            Op::AdvanceAnimations { msec_delta: 100 },
+        ],
+    );
+
+    // 3 is mostly still under 4 at the bottom, so pointing there hits 4.
+    let ranges = visible_ranges(&layout);
+    let &(idx, top, bottom) = ranges.last().unwrap();
+    assert_eq!(idx, 4);
+    let mon = layout.monitors().next().unwrap();
+    let pos = Point::from((10., (top + bottom) / 2.));
+    let (ws, _) = mon.workspace_under(pos).unwrap();
+    assert_eq!(mon.idx_of_ws(ws.id()), Some(4));
+    let ws = mon.workspace_under_narrow(pos).unwrap();
+    assert_eq!(mon.idx_of_ws(ws.id()), Some(4));
+}
+
+#[test]
+fn skipping_switch_retargeted_twice_is_continuous() {
+    let mut layout = set_up_workspaces(8);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(5),
+            Op::AdvanceAnimations { msec_delta: 600 },
+        ],
+    );
+    assert_ranges_continuous(&mut layout, [Op::FocusWorkspace(3)]);
+    check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 300 }]);
+    assert_in_order_without_overlap(&layout);
+
+    // Then somewhere in between the three that are on screen, then back past all of them.
+    for target in [4, 1, 6] {
+        assert_ranges_continuous(&mut layout, [Op::FocusWorkspace(target)]);
+        for _ in 0..4 {
+            check_ops_on_layout(&mut layout, [Op::AdvanceAnimations { msec_delta: 100 }]);
+            assert_in_order_without_overlap(&layout);
+        }
+    }
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_eq!(visible_ranges(&layout).len(), 1);
+    assert_eq!(workspace_geos(&layout)[6].loc.y, 0.);
+}
+
+#[test]
+fn covered_part_of_workspace_is_not_dimmed() {
+    let mut layout = set_up_workspaces(6);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FocusWorkspace(4),
+            Op::AdvanceAnimations { msec_delta: 300 },
+            Op::FocusWorkspace(3),
+            Op::AdvanceAnimations { msec_delta: 300 },
+        ],
+    );
+    layout.update_render_elements(None);
+
+    let ranges = visible_ranges(&layout);
+    let mon = layout.monitors().next().unwrap();
+    for geo in &mon.skip_dim_geos {
+        let covers_one = ranges
+            .iter()
+            .any(|(_, top, bottom)| geo.loc.y >= *top && geo.loc.y + geo.size.h <= *bottom);
+        assert!(
+            covers_one,
+            "dimming {geo:?} spans several workspaces: {ranges:?}"
+        );
+    }
+}
