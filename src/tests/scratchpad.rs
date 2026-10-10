@@ -430,6 +430,23 @@ fn screencast_window_list_skips_hidden_windows() {
     assert!(!windows.contains_key(&b));
 }
 
+#[cfg(feature = "xdp-gnome-screencast")]
+#[test]
+fn hidden_window_cannot_be_cast() {
+    let (mut f, id) = set_up();
+    map_window(&mut f, id, "a", None);
+    map_window(&mut f, id, "b", None);
+
+    let b = window_id(&mut f, "b");
+    assert!(f.niri().cast_params_for_window(b).is_some());
+
+    // A cast picked before hiding the window would never get any frames.
+    f.niri_state()
+        .do_action(Action::MoveWindowToScratchpad, false);
+    f.double_roundtrip(id);
+    assert!(f.niri().cast_params_for_window(b).is_none());
+}
+
 fn output_events(f: &mut Fixture, id: ClientId, surface: &WlSurface) -> String {
     let events: Vec<_> = f
         .client(id)

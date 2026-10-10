@@ -771,11 +771,21 @@ impl Niri {
         }
     }
 
-    fn cast_params_for_window(&self, window_id: u64) -> Option<(Size<i32, Physical>, u32)> {
+    pub(crate) fn cast_params_for_window(
+        &self,
+        window_id: u64,
+    ) -> Option<(Size<i32, Physical>, u32)> {
         let (_, mapped) = self
             .layout
             .windows()
             .find(|(_, m)| m.id().get() == window_id)?;
+
+        // Hidden scratchpad windows aren't rendered, so a cast of one would never get frames.
+        // The window could've been hidden while the user was picking it.
+        if self.layout.is_scratchpad_hidden(&mapped.window) {
+            return None;
+        }
+
         let output = self.casting.mapped_cast_output.get(&mapped.window)?;
         let scale = Scale::from(output.current_scale().fractional_scale());
         let bbox = mapped
