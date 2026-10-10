@@ -216,6 +216,9 @@ pub type WorkspaceGeoAndClip<'a, W> = (
 /// How much to darken a workspace that is fully moved out, during a skipping workspace switch.
 const SKIP_DIM: f32 = 0.35;
 
+/// Where workspaces that aren't a part of a skipping workspace switch are, far out of view.
+const SKIP_OUT_OF_VIEW_Y: f64 = 1e6;
+
 /// A workspace switch where the workspaces in between aren't shown.
 ///
 /// Workspaces that aren't next to each other still move like they were: the visible workspaces
@@ -300,14 +303,17 @@ impl WorkspaceSwitchSkip {
 }
 
 impl WorkspaceSwitch {
-    pub fn current_idx(&self) -> f64 {
+    /// Current workspace render index.
+    ///
+    /// Returns `None` for a skipping switch, where the workspaces aren't laid out in a strip by
+    /// index; see [`Monitor::workspace_render_idx()`] for that.
+    pub fn current_idx(&self) -> Option<f64> {
         match self {
-            WorkspaceSwitch::Animation(anim) => anim.value(),
-            // The positions are by workspace, see Monitor::workspace_render_idx().
-            WorkspaceSwitch::Skip(skip) => skip.target_idx,
-            WorkspaceSwitch::Gesture(gesture) => {
-                gesture.current_idx + gesture.animation.as_ref().map_or(0., |anim| anim.value())
-            }
+            WorkspaceSwitch::Animation(anim) => Some(anim.value()),
+            WorkspaceSwitch::Skip(_) => None,
+            WorkspaceSwitch::Gesture(gesture) => Some(
+                gesture.current_idx + gesture.animation.as_ref().map_or(0., |anim| anim.value()),
+            ),
         }
     }
 
@@ -1770,12 +1776,10 @@ impl<W: LayoutElement> Monitor<W> {
             }
         };
 
-        if let Some(WorkspaceSwitch::Skip(skip)) = &self.workspace_switch {
-            self.skip_render_idx(skip)
-        } else if let Some(switch) = &self.workspace_switch {
-            switch.current_idx()
-        } else {
-            self.active_workspace_idx as f64
+        match &self.workspace_switch {
+            Some(WorkspaceSwitch::Skip(skip)) => self.skip_render_idx(skip),
+            Some(switch) => switch.current_idx().unwrap(),
+            None => self.active_workspace_idx as f64,
         }
     }
 
@@ -2082,7 +2086,7 @@ impl<W: LayoutElement> Monitor<W> {
                     let y = ys
                         .iter()
                         .find(|pos| pos.idx == idx)
-                        .map_or(1e6, |pos| pos.y * ws_height_with_gap);
+                        .map_or(SKIP_OUT_OF_VIEW_Y, |pos| pos.y * ws_height_with_gap);
                     round_logical_in_physical(scale, y)
                 }
                 None => first_ws_y + idx as f64 * ws_height_with_gap,
