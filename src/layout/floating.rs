@@ -1,5 +1,6 @@
 use std::cmp::max;
 use std::iter::zip;
+use std::mem;
 use std::rc::Rc;
 
 use niri_config::utils::MergeWith as _;
@@ -53,6 +54,11 @@ pub struct FloatingSpace<W: LayoutElement> {
 
     /// Windows in the closing animation.
     closing_windows: Vec<ClosingWindow>,
+
+    /// Shown scratchpad windows in the closing animation.
+    ///
+    /// Like the windows themselves, these are pinned to the screen during workspace switches.
+    scratchpad_closing_windows: Vec<ClosingWindow>,
 
     /// View size for this space.
     view_size: Size<f64, Logical>,
@@ -214,6 +220,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
             active_window_id: None,
             interactive_resize: None,
             closing_windows: Vec::new(),
+            scratchpad_closing_windows: Vec::new(),
             view_size,
             working_area,
             scale,
@@ -252,18 +259,27 @@ impl<W: LayoutElement> FloatingSpace<W> {
             tile.advance_animations();
         }
 
-        self.closing_windows.retain_mut(|closing| {
-            closing.advance_animations();
-            closing.are_animations_ongoing()
-        });
+        for closing_windows in [
+            &mut self.closing_windows,
+            &mut self.scratchpad_closing_windows,
+        ] {
+            closing_windows.retain_mut(|closing| {
+                closing.advance_animations();
+                closing.are_animations_ongoing()
+            });
+        }
     }
 
     pub fn are_animations_ongoing(&self) -> bool {
-        self.tiles.iter().any(Tile::are_animations_ongoing) || !self.closing_windows.is_empty()
+        self.tiles.iter().any(Tile::are_animations_ongoing)
+            || !self.closing_windows.is_empty()
+            || !self.scratchpad_closing_windows.is_empty()
     }
 
     pub fn are_transitions_ongoing(&self) -> bool {
-        self.tiles.iter().any(Tile::are_transitions_ongoing) || !self.closing_windows.is_empty()
+        self.tiles.iter().any(Tile::are_transitions_ongoing)
+            || !self.closing_windows.is_empty()
+            || !self.scratchpad_closing_windows.is_empty()
     }
 
     pub fn update_render_elements(
@@ -568,8 +584,16 @@ impl<W: LayoutElement> FloatingSpace<W> {
         };
 
         let tile_size = tile.tile_size();
+        let in_scratchpad = tile.in_scratchpad;
 
-        self.start_close_animation_for_tile(renderer, snapshot, tile_size, tile_pos, blocker);
+        let closing = self.new_closing_window(renderer, snapshot, tile_size, tile_pos, blocker);
+        if let Some(closing) = closing {
+            if in_scratchpad {
+                self.scratchpad_closing_windows.push(closing);
+            } else {
+                self.closing_windows.push(closing);
+            }
+        }
     }
 
     pub fn activate_window_without_raising(&mut self, id: &W::Id) -> bool {
@@ -610,6 +634,20 @@ impl<W: LayoutElement> FloatingSpace<W> {
         tile_pos: Point<f64, Logical>,
         blocker: TransactionBlocker,
     ) {
+        let closing = self.new_closing_window(renderer, snapshot, tile_size, tile_pos, blocker);
+        if let Some(closing) = closing {
+            self.closing_windows.push(closing);
+        }
+    }
+
+    fn new_closing_window(
+        &self,
+        renderer: &mut GlesRenderer,
+        snapshot: TileRenderSnapshot,
+        tile_size: Size<f64, Logical>,
+        tile_pos: Point<f64, Logical>,
+        blocker: TransactionBlocker,
+    ) -> Option<ClosingWindow> {
         let anim = Animation::new(
             self.clock.clone(),
             0.,
@@ -629,13 +667,22 @@ impl<W: LayoutElement> FloatingSpace<W> {
             renderer, snapshot, scale, tile_size, tile_pos, blocker, anim,
         );
         match res {
-            Ok(closing) => {
-                self.closing_windows.push(closing);
-            }
+            Ok(closing) => Some(closing),
             Err(err) => {
                 warn!("error creating a closing window animation: {err:?}");
+                None
             }
         }
+    }
+
+    /// Takes the closing animations of shown scratchpad windows, to move them to another
+    /// workspace along with the shown scratchpad windows.
+    pub fn take_scratchpad_closing_windows(&mut self) -> Vec<ClosingWindow> {
+        mem::take(&mut self.scratchpad_closing_windows)
+    }
+
+    pub fn add_scratchpad_closing_windows(&mut self, closing_windows: Vec<ClosingWindow>) {
+        self.scratchpad_closing_windows.extend(closing_windows);
     }
 
     pub fn toggle_window_width(&mut self, id: Option<&W::Id>, forwards: bool) {
@@ -1082,6 +1129,17 @@ impl<W: LayoutElement> FloatingSpace<W> {
         // Draw the closing windows on top of the other windows.
         //
         // FIXME: I guess this should rather preserve the stacking order when the window is closed.
+        let scratchpad_closing_layer = if pin_scratchpad {
+            RenderLayer::PinnedScratchpad
+        } else {
+            RenderLayer::Normal
+        };
+        if layer == scratchpad_closing_layer {
+            for closing in self.scratchpad_closing_windows.iter().rev() {
+                let elem = closing.render(ctx.as_gles(), view_rect, scale);
+                push(elem.into());
+            }
+        }
         if layer.is_normal() {
             for closing in self.closing_windows.iter().rev() {
                 let elem = closing.render(ctx.as_gles(), view_rect, scale);

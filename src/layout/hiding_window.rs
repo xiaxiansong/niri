@@ -30,9 +30,10 @@ pub struct HidingWindow<Id> {
     /// Size of the tile.
     tile_size: Size<f64, Logical>,
 
-    /// Whether the window was pinned to the screen during a workspace switch when it was hidden.
+    /// Whether the window was a shown scratchpad window when it was hidden.
     ///
-    /// Such a window keeps animating out at the pinned place while the switch goes on.
+    /// Like shown scratchpad windows, such a window is pinned to the screen during workspace
+    /// switches, and follows the active workspace.
     pub pinned: bool,
 }
 

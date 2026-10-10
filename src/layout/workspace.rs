@@ -1,4 +1,5 @@
 use std::cmp::max;
+use std::mem;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -17,6 +18,7 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size, Transform};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
 
+use super::closing_window::ClosingWindow;
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
 use super::hiding_window::HidingWindow;
 use super::opening_window::OpeningWindowRenderElement;
@@ -862,6 +864,28 @@ impl<W: LayoutElement> Workspace<W> {
 
         set_tile_scratchpad(tile, ScratchpadState::Shown);
         true
+    }
+
+    /// Takes the hiding and closing animations of shown scratchpad windows.
+    ///
+    /// These stay on the screen like the shown scratchpad windows, so they follow the active
+    /// workspace along with them.
+    pub fn take_scratchpad_animations(&mut self) -> ScratchpadAnimations<W::Id> {
+        let (hiding, rest) = mem::take(&mut self.scratchpad_hiding)
+            .into_iter()
+            .partition(|hiding| hiding.pinned);
+        self.scratchpad_hiding = rest;
+
+        ScratchpadAnimations {
+            hiding,
+            closing: self.floating.take_scratchpad_closing_windows(),
+        }
+    }
+
+    pub fn add_scratchpad_animations(&mut self, animations: ScratchpadAnimations<W::Id>) {
+        self.scratchpad_hiding.extend(animations.hiding);
+        self.floating
+            .add_scratchpad_closing_windows(animations.closing);
     }
 
     /// Takes all shown scratchpad tiles out of the floating layout, from top to bottom.
@@ -2336,6 +2360,12 @@ pub struct TakenScratchpadTile<W: LayoutElement> {
     pub was_focused: bool,
     /// Its position in the workspace it was taken from.
     pub pos: Point<f64, Logical>,
+}
+
+/// Hiding and closing animations of shown scratchpad windows taken out of a workspace.
+pub struct ScratchpadAnimations<Id> {
+    hiding: Vec<HidingWindow<Id>>,
+    closing: Vec<ClosingWindow>,
 }
 
 /// Returns the resize edges for a point within the tile, or `None` if the point doesn't hit it.

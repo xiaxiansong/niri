@@ -3669,15 +3669,6 @@ impl<W: LayoutElement> Layout<W> {
         };
         let animate =
             animate && is_on_active_workspace && !self.options.animations.window_open.anim.off;
-        // During a workspace switch, shown scratchpad windows are pinned to the screen rather
-        // than moving with their workspace, so the hiding should start there.
-        let is_pinned = match &self.monitor_set {
-            MonitorSet::Normal { monitors, .. } => monitors.iter().any(|mon| {
-                mon.scratchpad_pin_geo().is_some()
-                    && mon.workspaces[mon.active_workspace_idx].has_window(&id)
-            }),
-            MonitorSet::NoOutputs { .. } => false,
-        };
         let hide_gen = animate.then(|| {
             let gen = self.scratchpad.next_gen;
             self.scratchpad.next_gen += 1;
@@ -3742,7 +3733,9 @@ impl<W: LayoutElement> Layout<W> {
                 0.,
                 tile.options().animations.window_open.anim,
             );
-            let pinned = is_pinned && is_floating && tile.in_scratchpad;
+            // A shown scratchpad window stays on the screen while animating out, like it would
+            // if it was still shown.
+            let pinned = is_floating && tile.in_scratchpad;
             let hiding = HidingWindow::new(id.clone(), gen, anim, pos, tile_size, pinned);
             ws.add_scratchpad_hiding(hiding);
         }

@@ -766,6 +766,8 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     /// Moves shown scratchpad windows from inactive workspaces to the active workspace.
+    ///
+    /// Outside the overview, this also moves their hiding and closing animations.
     pub fn scratchpad_follow(&mut self) {
         let active_idx = self.active_workspace_idx;
         let active_id = self.workspaces[active_idx].id();
@@ -773,8 +775,14 @@ impl<W: LayoutElement> Monitor<W> {
         // In the overview, the windows can be seen moving between workspaces, so animate that.
         let animate = self.overview_progress.is_some() && self.workspace_switch.is_some();
 
+        // Outside the overview, the windows are pinned to the screen, and so are their hiding and
+        // closing animations. Keep those on the screen too. In the overview, leave them where
+        // they are rather than have them jump between workspaces.
+        let move_animations = self.overview_progress.is_none();
+
         let mut tiles = Vec::new();
         let mut moves = Vec::new();
+        let mut animations = Vec::new();
         for (idx, ws) in self.workspaces.iter_mut().enumerate() {
             if idx != active_idx {
                 let taken = ws.take_shown_scratchpad_tiles();
@@ -784,15 +792,23 @@ impl<W: LayoutElement> Monitor<W> {
                     }
                 }
                 tiles.extend(taken);
+
+                if move_animations {
+                    animations.push(ws.take_scratchpad_animations());
+                }
             }
         }
 
         self.add_shown_scratchpad_tiles(tiles);
 
+        let new_idx = self.idx_of_ws(active_id).unwrap();
+        for animations in animations {
+            self.workspaces[new_idx].add_scratchpad_animations(animations);
+        }
+
         // Animate like Monitor::move_to_workspace(), following the workspace switch.
         let config = self.options.animations.workspace_switch.0;
         let ws_height_with_gap = self.workspace_size_with_gap(1.).h;
-        let new_idx = self.idx_of_ws(active_id).unwrap();
         for (id, source_id, mut old_pos) in moves {
             // There's a workspace switch, so the source workspace wasn't cleaned up.
             let source_idx = self.idx_of_ws(source_id).unwrap();

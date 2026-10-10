@@ -1530,9 +1530,99 @@ fn hiding_pinned_window_stays_pinned() {
     let mut layout = check_ops_with_options(options, ops);
     assert_snapshot!(pinned(&layout), @"[true]");
 
-    // At rest, it's a regular hiding window.
+    // At rest too, so that it stays on the screen if a workspace switch starts.
     check_ops_on_layout(&mut layout, [Op::CompleteAnimations, toggle(), hide(2)]);
+    assert_snapshot!(pinned(&layout), @"[true]");
+
+    // A window that wasn't in the scratchpad isn't pinned.
+    check_ops_on_layout(
+        &mut layout,
+        [Op::CompleteAnimations, window(3, 100), hide(3)],
+    );
     assert_snapshot!(pinned(&layout), @"[false]");
+}
+
+/// Workspaces with windows animating out to the scratchpad, by workspace index.
+fn hiding_workspaces(layout: &Layout<TestWindow>) -> String {
+    let mon = layout.monitors().next().unwrap();
+    let hiding: Vec<_> = mon
+        .workspaces
+        .iter()
+        .enumerate()
+        .flat_map(|(idx, ws)| ws.scratchpad_hiding().iter().map(move |h| (h.id, idx)))
+        .collect();
+    format!("{hiding:?} active {}", mon.active_workspace_idx())
+}
+
+#[test]
+fn hiding_pinned_window_follows_active_workspace() {
+    let mut options = linear_switch_options();
+    options.animations.window_open = linear_open_options().animations.window_open;
+
+    // Switching again while it animates out.
+    let mut ops = shown_window_at_100_50();
+    ops.extend([
+        Op::FocusWorkspaceDown,
+        Op::AdvanceAnimations { msec_delta: 500 },
+        hide(2),
+    ]);
+    let mut layout = check_ops_with_options(options.clone(), ops);
+    assert_snapshot!(hiding_workspaces(&layout), @"[(2, 1)] active 1");
+    check_ops_on_layout(&mut layout, [Op::FocusWorkspaceUp]);
+    assert_snapshot!(hiding_workspaces(&layout), @"[(2, 0)] active 0");
+
+    // Hiding at rest, then switching.
+    let mut ops = shown_window_at_100_50();
+    ops.extend([hide(2), Op::FocusWorkspaceDown]);
+    let layout = check_ops_with_options(options.clone(), ops);
+    assert_snapshot!(hiding_workspaces(&layout), @"[(2, 1)] active 1");
+
+    // A gesture keeps the window where it was until it ends.
+    let mut ops = shown_window_at_100_50();
+    ops.extend([
+        Op::WorkspaceSwitchGestureBegin {
+            output_idx: 1,
+            is_touchpad: true,
+        },
+        hide(2),
+        Op::WorkspaceSwitchGestureUpdate {
+            delta: 1000.,
+            timestamp: Duration::from_millis(10),
+            is_touchpad: true,
+        },
+    ]);
+    let mut layout = check_ops_with_options(options.clone(), ops);
+    assert_snapshot!(hiding_workspaces(&layout), @"[(2, 0)] active 0");
+    check_ops_on_layout(
+        &mut layout,
+        [Op::WorkspaceSwitchGestureEnd {
+            is_touchpad: Some(true),
+        }],
+    );
+    assert_snapshot!(hiding_workspaces(&layout), @"[(2, 1)] active 1");
+
+    // A window that wasn't in the scratchpad stays on its workspace.
+    let layout = check_ops_with_options(
+        options.clone(),
+        [
+            Op::AddOutput(1),
+            window(1, 100),
+            hide(1),
+            Op::FocusWorkspaceDown,
+        ],
+    );
+    assert_snapshot!(hiding_workspaces(&layout), @"[(1, 0)] active 1");
+
+    // In the overview, it stays on its workspace rather than jumping to another one.
+    let mut ops = shown_window_at_100_50();
+    ops.extend([
+        Op::ToggleOverview,
+        Op::CompleteAnimations,
+        hide(2),
+        Op::FocusWorkspaceDown,
+    ]);
+    let layout = check_ops_with_options(options, ops);
+    assert_snapshot!(hiding_workspaces(&layout), @"[(2, 0)] active 1");
 }
 
 #[test]
