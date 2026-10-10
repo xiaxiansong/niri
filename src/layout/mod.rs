@@ -3660,6 +3660,15 @@ impl<W: LayoutElement> Layout<W> {
         };
         let animate =
             animate && is_on_active_workspace && !self.options.animations.window_open.anim.off;
+        // During a workspace switch, shown scratchpad windows are pinned to the screen rather
+        // than moving with their workspace, so the hiding should start there.
+        let is_pinned = match &self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => monitors.iter().any(|mon| {
+                mon.scratchpad_pin_geo().is_some()
+                    && mon.workspaces[mon.active_workspace_idx].has_window(&id)
+            }),
+            MonitorSet::NoOutputs { .. } => false,
+        };
         let hide_gen = animate.then(|| {
             let gen = self.scratchpad.next_gen;
             self.scratchpad.next_gen += 1;
@@ -3724,7 +3733,8 @@ impl<W: LayoutElement> Layout<W> {
                 0.,
                 tile.options().animations.window_open.anim,
             );
-            let hiding = HidingWindow::new(id.clone(), gen, anim, pos, tile_size);
+            let pinned = is_pinned && is_floating && tile.in_scratchpad;
+            let hiding = HidingWindow::new(id.clone(), gen, anim, pos, tile_size, pinned);
             ws.add_scratchpad_hiding(hiding);
         }
         tile.scratchpad_hide_gen = hide_gen;
@@ -4796,18 +4806,29 @@ impl<W: LayoutElement> Layout<W> {
                 // potentially animatable.
                 let mut tile_pos = None;
                 if let Some((mon, (ws, ws_geo))) = self.monitors().find_map(|mon| {
-                    mon.workspaces_with_render_geo()
+                    mon.workspaces_with_render_geo_cull(false)
                         .find(|(ws, _)| ws.has_window(window))
                         .map(|rv| (mon, rv))
                 }) {
                     if mon.output() == &output {
-                        let (_, tile_offset, _) = ws
+                        let (tile, tile_offset, _) = ws
                             .tiles_with_render_positions()
                             .find(|(tile, _, _)| tile.window().id() == window)
                             .unwrap();
 
+                        // Pinned scratchpad windows are shown at the pinned place rather than
+                        // with their workspace, like in interactive_move_begin().
+                        let output_geo = Rectangle::from_size(mon.view_size());
+                        let ws_geo = match mon.scratchpad_pin_geo() {
+                            Some(pin_geo) if ws.is_floating(window) && tile.in_scratchpad => {
+                                Some(pin_geo)
+                            }
+                            _ => ws_geo.intersection(output_geo).map(|_| ws_geo),
+                        };
+
                         let zoom = mon.overview_zoom();
-                        tile_pos = Some((ws_geo.loc + tile_offset.upscale(zoom), zoom));
+                        tile_pos =
+                            ws_geo.map(|ws_geo| (ws_geo.loc + tile_offset.upscale(zoom), zoom));
                     }
                 }
 

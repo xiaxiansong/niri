@@ -1842,12 +1842,19 @@ impl<W: LayoutElement> Workspace<W> {
         }
 
         // Draw the hiding windows on top of the other windows, like the closing windows.
-        if layer.is_normal() {
-            let scale = Scale::from(self.scale.fractional_scale());
-            for hiding in self.scratchpad_hiding.iter().rev() {
-                if let Some(elem) = hiding.render(ctx.as_gles(), scale) {
-                    push(elem.into());
-                }
+        let scale = Scale::from(self.scale.fractional_scale());
+        for hiding in self.scratchpad_hiding.iter().rev() {
+            let hiding_layer = if pin_scratchpad && hiding.pinned {
+                RenderLayer::PinnedScratchpad
+            } else {
+                RenderLayer::Normal
+            };
+            if hiding_layer != layer {
+                continue;
+            }
+
+            if let Some(elem) = hiding.render(ctx.as_gles(), scale) {
+                push(elem.into());
             }
         }
 

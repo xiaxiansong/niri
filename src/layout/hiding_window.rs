@@ -29,6 +29,11 @@ pub struct HidingWindow<Id> {
 
     /// Size of the tile.
     tile_size: Size<f64, Logical>,
+
+    /// Whether the window was pinned to the screen during a workspace switch when it was hidden.
+    ///
+    /// Such a window keeps animating out at the pinned place while the switch goes on.
+    pub pinned: bool,
 }
 
 impl<Id> HidingWindow<Id> {
@@ -38,6 +43,7 @@ impl<Id> HidingWindow<Id> {
         anim: Animation,
         pos: Point<f64, Logical>,
         tile_size: Size<f64, Logical>,
+        pinned: bool,
     ) -> Self {
         Self {
             id,
@@ -46,6 +52,7 @@ impl<Id> HidingWindow<Id> {
             snapshot: None,
             pos,
             tile_size,
+            pinned,
         }
     }
 

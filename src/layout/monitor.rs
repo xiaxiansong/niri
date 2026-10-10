@@ -2434,6 +2434,8 @@ impl<W: LayoutElement> Monitor<W> {
             push(scale_relocate(*geo, elem));
         }
 
+        let active_ws_id = self.workspaces[self.active_workspace_idx].id();
+
         // Draw in passes for correct Z ordering during window movement between workspaces:
         // - floating windows moving between workspaces
         // - normal floating windows
@@ -2518,6 +2520,8 @@ impl<W: LayoutElement> Monitor<W> {
                         );
                     }
                     1 => {
+                        // Only the active workspace has anything pinned.
+                        let pin_scratchpad = pin_scratchpad && ws.id() == active_ws_id;
                         ws.render_floating(
                             ctx.r(),
                             xray_pos,

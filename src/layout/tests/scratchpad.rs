@@ -1307,6 +1307,38 @@ fn interactive_move_of_pinned_window_starts_at_pinned_position() {
 }
 
 #[test]
+fn dragged_pinned_window_starts_from_pinned_position() {
+    let mut ops = shown_window_at_100_50();
+    ops.extend([
+        Op::FocusWorkspaceDown,
+        Op::AdvanceAnimations { msec_delta: 500 },
+        Op::InteractiveMoveBegin {
+            window: 2,
+            output_idx: 1,
+            px: 150.,
+            py: 150.,
+        },
+        Op::InteractiveMoveUpdate {
+            window: 2,
+            dx: 100.,
+            dy: 100.,
+            output_idx: 1,
+            px: 250.,
+            py: 250.,
+        },
+    ]);
+    let layout = check_ops_with_options(linear_switch_options(), ops);
+
+    // The window then animates from where it was seen towards the pointer, rather than from where
+    // its workspace is. Before the move started, it was pulled 19 px towards the pointer from its
+    // pinned position at 100, 50.
+    let Some(InteractiveMoveState::Moving(move_)) = &layout.interactive_move else {
+        panic!("interactive move must be moving");
+    };
+    assert_close(move_.tile_render_location(1.), Point::from((119., 69.)), 1.);
+}
+
+#[test]
 fn following_window_keeps_screen_position() {
     let mut ops = shown_window_at_100_50();
     ops.extend([Op::FocusWorkspaceDown, Op::CompleteAnimations]);
@@ -1473,6 +1505,34 @@ fn hiding_on_active_workspace_animates() {
     check_ops_on_layout(&mut layout, [advance(60)]);
     assert_snapshot!(hiding(&layout), @"");
     assert_eq!(layout.hiding_window_output(&1), None);
+}
+
+#[test]
+fn hiding_pinned_window_stays_pinned() {
+    let pinned = |layout: &Layout<TestWindow>| {
+        let hiding: Vec<_> = layout
+            .workspaces()
+            .flat_map(|(_, _, ws)| ws.scratchpad_hiding())
+            .map(|hiding| hiding.pinned)
+            .collect();
+        format!("{hiding:?}")
+    };
+
+    // During a workspace switch, it animates out where it was pinned.
+    let mut options = linear_switch_options();
+    options.animations.window_open = linear_open_options().animations.window_open;
+    let mut ops = shown_window_at_100_50();
+    ops.extend([
+        Op::FocusWorkspaceDown,
+        Op::AdvanceAnimations { msec_delta: 500 },
+        hide(2),
+    ]);
+    let mut layout = check_ops_with_options(options, ops);
+    assert_snapshot!(pinned(&layout), @"[true]");
+
+    // At rest, it's a regular hiding window.
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations, toggle(), hide(2)]);
+    assert_snapshot!(pinned(&layout), @"[false]");
 }
 
 #[test]
