@@ -712,7 +712,8 @@ fn operations_on_hidden_window_are_ignored() {
 
     // Methods without a corresponding op.
     let mut layout = check_ops(setup);
-    assert_eq!(layout.popup_target_rect(&1), Rectangle::default());
+    assert_eq!(layout.popup_target_rect(&1, false), Rectangle::default());
+    assert_eq!(layout.popup_target_rect(&1, true), Rectangle::default());
     assert_eq!(layout.scroll_amount_to_activate(&1), 0.);
     assert!(!layout.should_trigger_focus_follows_mouse_on(&1));
     let output = layout.outputs().next().unwrap().clone();
