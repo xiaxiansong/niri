@@ -1852,6 +1852,12 @@ impl<W: LayoutElement> Monitor<W> {
             center_idx = render_idx.round() as usize;
         }
 
+        // This shouldn't happen, but with nothing on screen there's nothing to place the target
+        // next to, so fall back to a regular switch.
+        if items.is_empty() {
+            return None;
+        }
+
         let target_id = self.workspaces[target_idx].id();
         let target_y = match items.iter().find(|item| item.id == target_id) {
             // Already visible, for example when going back.
