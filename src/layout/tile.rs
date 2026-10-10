@@ -1608,7 +1608,6 @@ impl<W: LayoutElement> Tile<W> {
         &self.options
     }
 
-    #[cfg(test)]
     pub fn view_size(&self) -> Size<f64, Logical> {
         self.view_size
     }

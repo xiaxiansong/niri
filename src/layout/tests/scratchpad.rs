@@ -1536,6 +1536,27 @@ fn hiding_pinned_window_stays_pinned() {
 }
 
 #[test]
+fn hidden_window_gets_new_config() {
+    let mut layout = check_ops([Op::AddOutput(1), floating_window(1), hide(1)]);
+
+    let mut options = Options::default();
+    options.animations.window_open.anim.off = true;
+    options.layout.border.off = false;
+    options.layout.border.width = 7.;
+    layout.update_options(options);
+
+    let tile = layout
+        .scratchpad
+        .hidden
+        .iter()
+        .find(|tile| tile.window().0.id == 1)
+        .unwrap();
+    assert!(tile.options().animations.window_open.anim.off);
+    assert_eq!(tile.options().layout.border.width, 7.);
+    layout.verify_invariants();
+}
+
+#[test]
 fn hiding_without_animation() {
     // On an inactive workspace with --id.
     let layout = check_ops_with_options(

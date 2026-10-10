@@ -3321,6 +3321,15 @@ impl<W: LayoutElement> Layout<W> {
             move_.tile.update_config(view_size, scale, Rc::new(options));
         }
 
+        // Hidden scratchpad tiles get the config of their workspace when they are shown, but they
+        // still use it before that, for example to animate hiding.
+        for tile in &mut self.scratchpad.hidden {
+            let scale = tile.scale();
+            let options = Options::clone(&options).adjusted_for_scale(scale);
+            tile.update_config(tile.view_size(), scale, Rc::new(options));
+            tile.stop_all_animations();
+        }
+
         match &mut self.monitor_set {
             MonitorSet::Normal { monitors, .. } => {
                 for mon in monitors {
