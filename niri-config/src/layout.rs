@@ -21,6 +21,7 @@ pub struct Layout {
     pub always_center_single_column: bool,
     pub fill_view_after_removal: bool,
     pub fill_view_after_resize: bool,
+    pub resize_neighbor_to_fill: bool,
     pub empty_workspace_above_first: bool,
     pub default_column_display: ColumnDisplay,
     pub gaps: f64,
@@ -46,6 +47,7 @@ impl Default for Layout {
             always_center_single_column: false,
             fill_view_after_removal: false,
             fill_view_after_resize: false,
+            resize_neighbor_to_fill: false,
             empty_workspace_above_first: false,
             default_column_display: ColumnDisplay::Normal,
             gaps: 16.,
@@ -72,6 +74,7 @@ impl MergeWith<LayoutPart> for Layout {
             always_center_single_column,
             fill_view_after_removal,
             fill_view_after_resize,
+            resize_neighbor_to_fill,
             empty_workspace_above_first,
             gaps,
         );
@@ -126,6 +129,8 @@ pub struct LayoutPart {
     pub fill_view_after_removal: Option<Flag>,
     #[knuffel(child)]
     pub fill_view_after_resize: Option<Flag>,
+    #[knuffel(child)]
+    pub resize_neighbor_to_fill: Option<Flag>,
     #[knuffel(child)]
     pub empty_workspace_above_first: Option<Flag>,
     #[knuffel(child, unwrap(argument, str))]

@@ -1486,6 +1486,7 @@ mod tests {
                 always_center_single_column: false,
                 fill_view_after_removal: false,
                 fill_view_after_resize: false,
+                resize_neighbor_to_fill: false,
                 empty_workspace_above_first: false,
                 default_column_display: Tabbed,
                 gaps: 8.0,

@@ -4123,6 +4123,7 @@ prop_compose! {
         always_center_single_column in prop::option::of(any::<bool>().prop_map(Flag)),
         fill_view_after_removal in prop::option::of(any::<bool>().prop_map(Flag)),
         fill_view_after_resize in prop::option::of(any::<bool>().prop_map(Flag)),
+        resize_neighbor_to_fill in prop::option::of(any::<bool>().prop_map(Flag)),
         empty_workspace_above_first in prop::option::of(any::<bool>().prop_map(Flag)),
     ) -> niri_config::LayoutPart {
         niri_config::LayoutPart {
@@ -4132,6 +4133,7 @@ prop_compose! {
             always_center_single_column,
             fill_view_after_removal,
             fill_view_after_resize,
+            resize_neighbor_to_fill,
             empty_workspace_above_first,
             focus_ring,
             border,
