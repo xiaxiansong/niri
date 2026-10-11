@@ -820,3 +820,268 @@ fn removal_flag_does_not_fill_view_after_resize() {
     ops.extend(set_width(4, 200));
     assert_snapshot!(off_on(Options::default(), &ops), @"off: 784, on: 784");
 }
+
+/// Screen X and width of each tile on the first workspace, after committing and completing the
+/// animations, for resize-neighbor-to-fill off and on.
+fn neighbor_off_on(options: Options, ops: &[Op]) -> String {
+    let run = |fill| {
+        let mut options = options.clone();
+        options.layout.resize_neighbor_to_fill = fill;
+        let mut layout = check_ops_with_options(options, ops.iter().cloned());
+        for id in 1..=5 {
+            Op::Communicate(id).apply(&mut layout);
+        }
+        Op::CompleteAnimations.apply(&mut layout);
+
+        let (_, _, ws) = layout.workspaces().next().unwrap();
+        let tiles: Vec<_> = ws
+            .tiles_with_render_positions()
+            .map(|(tile, pos, _)| format!("{}+{}", pos.x, tile.tile_size().w))
+            .collect();
+        tiles.join(" ")
+    };
+
+    format!("off: {}\non: {}", run(false), run(true))
+}
+
+fn proportion(percent: f64) -> Op {
+    Op::SetColumnWidth(SizeChange::SetProportion(percent))
+}
+
+fn adjust(percent: f64) -> Op {
+    Op::SetColumnWidth(SizeChange::AdjustProportion(percent))
+}
+
+/// Two half-width columns filling the 1280 px wide view, the right one focused.
+fn two_halves() -> Vec<Op> {
+    vec![
+        Op::AddOutput(1),
+        window(1, 500),
+        proportion(50.),
+        window(2, 500),
+        proportion(50.),
+        Op::Communicate(1),
+        Op::Communicate(2),
+        // Move the view to the committed widths.
+        Op::FocusColumnFirst,
+        Op::FocusColumnLast,
+        Op::CompleteAnimations,
+    ]
+}
+
+#[test]
+fn neighbor_two_halves_setup() {
+    // 616 px wide columns with 16 px gaps fill 1280 px exactly.
+    assert_snapshot!(neighbor_off_on(Options::default(), &two_halves()), @"
+    off: 648+616 16+616
+    on: 648+616 16+616
+    ");
+}
+
+#[test]
+fn neighbor_grow_right_column() {
+    let mut ops = two_halves();
+    ops.push(adjust(10.));
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 522+742 -110+616
+    on: 522+742 17+489
+    ");
+}
+
+#[test]
+fn neighbor_shrink_right_column() {
+    let mut ops = two_halves();
+    ops.push(adjust(-10.));
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 648+489 16+616
+    on: 774+489 16+742
+    ");
+}
+
+#[test]
+fn neighbor_grow_left_column() {
+    let mut ops = two_halves();
+    ops.extend([Op::FocusColumnLeft, Op::CompleteAnimations, adjust(10.)]);
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 16+742 774+616
+    on: 16+742 774+489
+    ");
+}
+
+#[test]
+fn neighbor_repeat_before_commit() {
+    // Pressing the key twice before the windows commit still keeps the view filled.
+    let mut ops = two_halves();
+    ops.extend([adjust(10.), adjust(10.)]);
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 396+868 -236+616
+    on: 395+868 16+363
+    ");
+}
+
+#[test]
+fn neighbor_switch_preset() {
+    let mut options = Options::default();
+    options.layout.preset_column_widths = vec![
+        PresetSize::Proportion(0.25),
+        PresetSize::Proportion(0.5),
+        PresetSize::Proportion(0.75),
+    ];
+
+    // From one half, the next preset is three quarters, and the neighbor gets one quarter.
+    let mut ops = two_halves();
+    ops.push(Op::SwitchPresetColumnWidth);
+    assert_snapshot!(neighbor_off_on(options.clone(), &ops), @"
+    off: 332+932 -300+616
+    on: 332+932 16+300
+    ");
+
+    // Then one quarter, and the neighbor gets three quarters.
+    ops.extend([
+        Op::Communicate(1),
+        Op::Communicate(2),
+        Op::SwitchPresetColumnWidth,
+    ]);
+    assert_snapshot!(neighbor_off_on(options, &ops), @"
+    off: 332+300 -300+616
+    on: 964+300 16+932
+    ");
+}
+
+#[test]
+fn neighbor_by_window_id() {
+    // Resizing an unfocused column by id works too.
+    let mut ops = two_halves();
+    ops.push(Op::SetWindowWidth {
+        id: Some(1),
+        change: SizeChange::AdjustProportion(10.),
+    });
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 648+616 -110+742
+    on: 774+489 16+742
+    ");
+}
+
+#[test]
+fn neighbor_three_columns() {
+    // Quarter, quarter, half; the middle column grows and the right one shrinks.
+    let ops = vec![
+        Op::AddOutput(1),
+        window(1, 500),
+        proportion(25.),
+        window(2, 500),
+        proportion(25.),
+        window(3, 500),
+        proportion(50.),
+        Op::Communicate(1),
+        Op::Communicate(2),
+        Op::Communicate(3),
+        Op::FocusColumnFirst,
+        Op::FocusColumnRight,
+        Op::CompleteAnimations,
+        adjust(10.),
+    ];
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 332+426 16+300 774+616
+    on: 332+426 16+300 774+489
+    ");
+}
+
+#[test]
+fn neighbor_with_columns_off_screen() {
+    // Columns off-screen to the left stay where they are.
+    let mut ops = vec![
+        Op::AddOutput(1),
+        window(1, 500),
+        window(2, 500),
+        proportion(50.),
+        window(3, 500),
+        proportion(50.),
+        Op::Communicate(1),
+        Op::Communicate(2),
+        Op::Communicate(3),
+        Op::FocusColumnFirst,
+        Op::FocusColumnLast,
+        Op::CompleteAnimations,
+    ];
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 648+616 -500+500 16+616
+    on: 648+616 -500+500 16+616
+    ");
+
+    ops.push(adjust(10.));
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 522+742 -626+500 -110+616
+    on: 522+742 -499+500 17+489
+    ");
+}
+
+#[test]
+fn neighbor_not_filling_view() {
+    // Half and a quarter don't fill the view, so only the column changes.
+    let ops = vec![
+        Op::AddOutput(1),
+        window(1, 500),
+        proportion(50.),
+        window(2, 500),
+        proportion(25.),
+        Op::Communicate(1),
+        Op::Communicate(2),
+        // Move the view to the committed widths.
+        Op::FocusColumnFirst,
+        Op::FocusColumnLast,
+        Op::CompleteAnimations,
+        adjust(10.),
+    ];
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 648+426 16+616
+    on: 648+426 16+616
+    ");
+}
+
+#[test]
+fn neighbor_too_narrow() {
+    // The left window can't be narrower than 600 px, so the right column resizes like usual.
+    let mut params = TestWindowParams::new(1);
+    params.bbox = Rectangle::from_size(Size::from((500, 200)));
+    params.min_max_size = (Size::from((600, 0)), Size::from((0, 0)));
+    let mut ops = vec![
+        Op::AddOutput(1),
+        Op::AddWindow { params },
+        proportion(50.),
+        window(2, 500),
+        proportion(50.),
+        Op::Communicate(1),
+        Op::Communicate(2),
+        // Move the view to the committed widths.
+        Op::FocusColumnFirst,
+        Op::FocusColumnLast,
+        Op::CompleteAnimations,
+        adjust(10.),
+    ];
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 522+742 -110+616
+    on: 522+742 -110+616
+    ");
+
+    // Shrinking still works.
+    ops.pop();
+    ops.push(adjust(-10.));
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 648+489 16+616
+    on: 774+489 16+742
+    ");
+}
+
+#[test]
+fn neighbor_with_centering_is_not_affected() {
+    let mut ops = two_halves();
+    ops.push(adjust(10.));
+
+    let mut options = Options::default();
+    options.layout.center_focused_column = CenterFocusedColumn::Always;
+    assert_snapshot!(neighbor_off_on(options, &ops), @"
+    off: 269+742 -363+616
+    on: 269+742 -363+616
+    ");
+}

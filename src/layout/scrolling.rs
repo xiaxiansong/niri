@@ -2699,10 +2699,9 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return;
         }
 
-        let col = &mut self.columns[self.active_column_idx];
-        col.toggle_width(None, forwards);
-
-        cancel_resize_for_column(&mut self.interactive_resize, col);
+        self.change_column_width(self.active_column_idx, |col, transaction| {
+            col.toggle_width(None, forwards, transaction);
+        });
     }
 
     pub fn toggle_full_width(&mut self) {
@@ -2717,27 +2716,13 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     pub fn set_window_width(&mut self, window: Option<&W::Id>, change: SizeChange) {
-        if self.columns.is_empty() {
+        let Some((col_idx, tile_idx)) = self.find_column_and_tile(window) else {
             return;
-        }
-
-        let (col, tile_idx) = if let Some(window) = window {
-            self.columns
-                .iter_mut()
-                .find_map(|col| {
-                    col.tiles
-                        .iter()
-                        .position(|tile| tile.window().id() == window)
-                        .map(|tile_idx| (col, Some(tile_idx)))
-                })
-                .unwrap()
-        } else {
-            (&mut self.columns[self.active_column_idx], None)
         };
 
-        col.set_column_width(change, tile_idx, true);
-
-        cancel_resize_for_column(&mut self.interactive_resize, col);
+        self.change_column_width(col_idx, |col, transaction| {
+            col.set_column_width(change, tile_idx, true, transaction);
+        });
     }
 
     pub fn set_window_height(&mut self, window: Option<&W::Id>, change: SizeChange) {
@@ -2789,27 +2774,149 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     pub fn toggle_window_width(&mut self, window: Option<&W::Id>, forwards: bool) {
+        let Some((col_idx, tile_idx)) = self.find_column_and_tile(window) else {
+            return;
+        };
+
+        self.change_column_width(col_idx, |col, transaction| {
+            col.toggle_width(tile_idx, forwards, transaction);
+        });
+    }
+
+    /// Finds the column and the tile index of the window, or the active column without a window.
+    fn find_column_and_tile(&self, window: Option<&W::Id>) -> Option<(usize, Option<usize>)> {
         if self.columns.is_empty() {
+            return None;
+        }
+
+        let Some(window) = window else {
+            return Some((self.active_column_idx, None));
+        };
+
+        let found = self.columns.iter().enumerate().find_map(|(col_idx, col)| {
+            col.tiles
+                .iter()
+                .position(|tile| tile.window().id() == window)
+                .map(|tile_idx| (col_idx, Some(tile_idx)))
+        });
+        Some(found.unwrap())
+    }
+
+    /// Changes the width of a column.
+    ///
+    /// With resize-neighbor-to-fill, when the visible columns fill the working area exactly, a
+    /// neighboring column takes up the difference, so that they keep filling it.
+    fn change_column_width(
+        &mut self,
+        col_idx: usize,
+        change: impl FnOnce(&mut Column<W>, Transaction),
+    ) {
+        let neighbor = self.neighbor_to_fill(col_idx);
+
+        // Resize both columns in one transaction, so that they never overflow or leave a gap.
+        let transaction = Transaction::new();
+
+        let col = &mut self.columns[col_idx];
+        let prev_width = col.expected_width();
+        change(col, transaction.clone());
+        cancel_resize_for_column(&mut self.interactive_resize, col);
+
+        let Some((neighbor_idx, view_pos)) = neighbor else {
+            return;
+        };
+
+        let delta = self.columns[col_idx].expected_width() - prev_width;
+        if delta == 0. {
             return;
         }
 
-        let (col, tile_idx) = if let Some(window) = window {
-            self.columns
-                .iter_mut()
-                .find_map(|col| {
-                    col.tiles
-                        .iter()
-                        .position(|tile| tile.window().id() == window)
-                        .map(|tile_idx| (col, Some(tile_idx)))
-                })
-                .unwrap()
-        } else {
-            (&mut self.columns[self.active_column_idx], None)
+        // If the neighbor can't take up the difference, resize just the column like usual.
+        let neighbor = &mut self.columns[neighbor_idx];
+        let width = neighbor.expected_width() - delta;
+        if !neighbor.set_expected_width(width, transaction) {
+            return;
+        }
+        cancel_resize_for_column(&mut self.interactive_resize, neighbor);
+
+        // The total width stays the same, so keep the view where it is. Move it together with the
+        // resize, since the columns to the left of the active one shift its position.
+        let active_x = self
+            .expected_column_xs()
+            .nth(self.active_column_idx)
+            .unwrap();
+        let config = self.options.animations.window_resize.anim;
+        self.animate_view_offset_with_config(self.active_column_idx, view_pos - active_x, config);
+    }
+
+    /// Returns the column X positions that the columns will have once their windows commit the
+    /// requested widths.
+    fn expected_column_xs(&self) -> impl Iterator<Item = f64> + '_ {
+        let data = self.columns.iter().map(|col| ColumnData {
+            width: col.expected_width(),
+        });
+        self.column_xs(data)
+    }
+
+    /// Returns the neighbor that should take up a width change of the column, and the view
+    /// position to keep.
+    ///
+    /// This is when resize-neighbor-to-fill is on, and the column is one of several columns that
+    /// fill the working area exactly. The neighbor is the next visible column, or the previous
+    /// one for the last visible column.
+    fn neighbor_to_fill(&self, col_idx: usize) -> Option<(usize, f64)> {
+        if !self.options.layout.resize_neighbor_to_fill
+            || self.view_offset.is_gesture()
+            || self.interactive_resize.is_some()
+            || self.is_centering_focused_column()
+        {
+            return None;
+        }
+
+        // Look at where the columns will be once everything settles, so that pressing a key
+        // repeatedly works before the windows commit.
+        let widths: Vec<f64> = self.columns.iter().map(Column::expected_width).collect();
+        let xs: Vec<f64> = self.expected_column_xs().collect();
+        let view_pos = xs[self.active_column_idx] + self.view_offset.target();
+
+        let gaps = self.options.layout.gaps;
+        let left = view_pos + self.working_area.loc.x;
+        let right = left + self.working_area.size.w;
+        // Windows round their sizes, so allow for that.
+        let tolerance = 2.;
+
+        let is_visible = |idx: usize| {
+            left + gaps - tolerance <= xs[idx] && xs[idx] + widths[idx] + gaps <= right + tolerance
         };
+        let first = (0..self.columns.len()).find(|&idx| is_visible(idx))?;
+        let last = (first..self.columns.len())
+            .take_while(|&idx| is_visible(idx))
+            .last()
+            .unwrap();
 
-        col.toggle_width(tile_idx, forwards);
+        if first == last || !(first..=last).contains(&col_idx) {
+            return None;
+        }
 
-        cancel_resize_for_column(&mut self.interactive_resize, col);
+        let fills = (xs[first] - gaps - left).abs() <= tolerance
+            && (xs[last] + widths[last] + gaps - right).abs() <= tolerance;
+        if !fills {
+            return None;
+        }
+
+        // Fullscreen and maximized columns don't follow their width.
+        let all_normal = self.columns[first..=last]
+            .iter()
+            .all(|col| col.sizing_mode().is_normal() && col.pending_sizing_mode().is_normal());
+        if !all_normal {
+            return None;
+        }
+
+        let neighbor = if col_idx < last {
+            col_idx + 1
+        } else {
+            col_idx - 1
+        };
+        Some((neighbor, view_pos))
     }
 
     pub fn toggle_window_height(&mut self, window: Option<&W::Id>, forwards: bool) {
@@ -3721,7 +3828,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             }
 
             let window_width = (resize.original_window_size.w + dx).round() as i32;
-            col.set_column_width(SizeChange::SetFixed(window_width), Some(tile_idx), false);
+            col.set_column_width(
+                SizeChange::SetFixed(window_width),
+                Some(tile_idx),
+                false,
+                Transaction::new(),
+            );
         }
 
         if resize.data.edges.intersects(ResizeEdge::TOP_BOTTOM) {
@@ -4643,6 +4755,33 @@ impl<W: LayoutElement> Column<W> {
         self.update_tile_sizes_with_transaction(animate, Transaction::new());
     }
 
+    /// Returns the min and max tile width in the normal sizing mode.
+    fn min_max_width(&self) -> (f64, f64) {
+        let min_width = self
+            .tiles
+            .iter()
+            .map(|tile| NotNan::new(tile.min_size_nonfullscreen().w.max(1.)).unwrap())
+            .max()
+            .map(NotNan::into_inner)
+            .unwrap();
+        let max_width = self
+            .tiles
+            .iter()
+            .filter_map(|tile| {
+                let w = tile.max_size_nonfullscreen().w;
+                if w == 0. {
+                    None
+                } else {
+                    Some(NotNan::new(w).unwrap())
+                }
+            })
+            .min()
+            .map(NotNan::into_inner)
+            .unwrap_or(f64::from(i32::MAX));
+        let max_width = f64::max(max_width, min_width);
+        (min_width, max_width)
+    }
+
     fn update_tile_sizes_with_transaction(&mut self, animate: bool, transaction: Transaction) {
         let sizing_mode = self.pending_sizing_mode();
         if matches!(sizing_mode, SizingMode::Fullscreen | SizingMode::Maximized) {
@@ -4683,26 +4822,7 @@ impl<W: LayoutElement> Column<W> {
             .collect();
 
         // Compute the column width.
-        let min_width = min_size
-            .iter()
-            .map(|size| NotNan::new(size.w).unwrap())
-            .max()
-            .map(NotNan::into_inner)
-            .unwrap();
-        let max_width = max_size
-            .iter()
-            .filter_map(|size| {
-                let w = size.w;
-                if w == 0. {
-                    None
-                } else {
-                    Some(NotNan::new(w).unwrap())
-                }
-            })
-            .min()
-            .map(NotNan::into_inner)
-            .unwrap_or(f64::from(i32::MAX));
-        let max_width = f64::max(max_width, min_width);
+        let (min_width, max_width) = self.min_max_width();
 
         let width = if self.is_full_width {
             ColumnWidth::Proportion(1.)
@@ -5021,7 +5141,7 @@ impl<W: LayoutElement> Column<W> {
         true
     }
 
-    fn toggle_width(&mut self, tile_idx: Option<usize>, forwards: bool) {
+    fn toggle_width(&mut self, tile_idx: Option<usize>, forwards: bool, transaction: Transaction) {
         let tile_idx = tile_idx.unwrap_or(self.active_tile_idx);
 
         let preset_idx = if self.is_full_width || self.is_pending_maximized {
@@ -5067,7 +5187,7 @@ impl<W: LayoutElement> Column<W> {
         };
 
         let preset = self.options.layout.preset_column_widths[preset_idx];
-        self.set_column_width(SizeChange::from(preset), Some(tile_idx), true);
+        self.set_column_width(SizeChange::from(preset), Some(tile_idx), true, transaction);
 
         self.preset_width_idx = Some(preset_idx);
     }
@@ -5084,7 +5204,13 @@ impl<W: LayoutElement> Column<W> {
         self.update_tile_sizes(true);
     }
 
-    fn set_column_width(&mut self, change: SizeChange, tile_idx: Option<usize>, animate: bool) {
+    fn set_column_width(
+        &mut self,
+        change: SizeChange,
+        tile_idx: Option<usize>,
+        animate: bool,
+        transaction: Transaction,
+    ) {
         let current = if self.is_full_width || self.is_pending_maximized {
             ColumnWidth::Proportion(1.)
         } else {
@@ -5136,7 +5262,50 @@ impl<W: LayoutElement> Column<W> {
         self.preset_width_idx = None;
         self.is_full_width = false;
         self.is_pending_maximized = false;
-        self.update_tile_sizes(animate);
+        self.update_tile_sizes_with_transaction(animate, transaction);
+    }
+
+    /// Returns the width the column will have in the normal sizing mode once its windows commit
+    /// the requested sizes.
+    fn expected_width(&self) -> f64 {
+        let (min_width, max_width) = self.min_max_width();
+        let width = if self.is_full_width {
+            ColumnWidth::Proportion(1.)
+        } else {
+            self.width
+        };
+        let width = self.resolve_column_width(width);
+        f64::max(f64::min(width, max_width), min_width) + self.extra_size().w
+    }
+
+    /// Sets the column width so that the column will be `width` wide in the normal sizing mode.
+    ///
+    /// A proportion width stays a proportion. Returns `false` without changing anything if the
+    /// windows can't be that wide.
+    fn set_expected_width(&mut self, width: f64, transaction: Transaction) -> bool {
+        let (min_width, max_width) = self.min_max_width();
+        let gaps = self.options.layout.gaps;
+        let extra = self.extra_size().w;
+
+        let tile_width = width - extra;
+        if tile_width < min_width || max_width < tile_width {
+            return false;
+        }
+
+        self.width = match self.width {
+            ColumnWidth::Proportion(_) => {
+                let full = self.working_area.size.w - gaps;
+                if full <= 0. {
+                    return false;
+                }
+                ColumnWidth::Proportion((tile_width + gaps + extra) / full)
+            }
+            ColumnWidth::Fixed(_) => ColumnWidth::Fixed(tile_width),
+        };
+        self.preset_width_idx = None;
+        self.is_full_width = false;
+        self.update_tile_sizes_with_transaction(true, transaction);
+        true
     }
 
     fn set_window_height(&mut self, change: SizeChange, tile_idx: Option<usize>, animate: bool) {
