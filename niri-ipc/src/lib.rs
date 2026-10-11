@@ -880,6 +880,21 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
+    /// Hide a window in the scratchpad, or take it out if it's in the scratchpad.
+    ///
+    /// A window that's not in the scratchpad is hidden. A window in the scratchpad is taken out of
+    /// it and remains floating; a hidden one is shown on the focused workspace first.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Hide the focused window in the scratchpad, or take it out")
+    )]
+    ToggleWindowInScratchpad {
+        /// Id of the window to toggle.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
     /// Move a floating window on screen.
     #[cfg_attr(feature = "clap", clap(about = "Move the floating window on screen"))]
     MoveFloatingWindow {

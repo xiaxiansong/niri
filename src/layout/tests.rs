@@ -665,6 +665,10 @@ enum Op {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
     },
+    ToggleWindowInScratchpad {
+        #[proptest(strategy = "proptest::option::of(1..=5usize)")]
+        id: Option<usize>,
+    },
     SetParent {
         #[proptest(strategy = "1..=5usize")]
         id: usize,
@@ -1451,6 +1455,11 @@ impl Op {
             Op::ToggleScratchpad { id } => {
                 let res = layout.toggle_scratchpad(|win| id.is_none_or(|id| win.0.id == id));
                 if let ScratchpadToggle::Hidden(id) = res {
+                    layout.prepare_hidden_scratchpad_window(&id);
+                }
+            }
+            Op::ToggleWindowInScratchpad { id } => {
+                if let Some(id) = layout.toggle_window_in_scratchpad(id.as_ref()) {
                     layout.prepare_hidden_scratchpad_window(&id);
                 }
             }

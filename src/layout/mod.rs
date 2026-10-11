@@ -4015,6 +4015,23 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// Moves a window to the scratchpad, or takes it out if it's in the scratchpad.
+    ///
+    /// Returns the id of the window if it was hidden.
+    pub fn toggle_window_in_scratchpad(&mut self, window: Option<&W::Id>) -> Option<W::Id> {
+        let id = match window {
+            Some(id) => id.clone(),
+            None => self.focus()?.id().clone(),
+        };
+
+        if self.is_scratchpad_hidden(&id) || self.is_scratchpad_shown(&id) {
+            self.remove_from_scratchpad(Some(&id));
+            None
+        } else {
+            self.scratchpad_hide(&id, true)
+        }
+    }
+
     /// Takes a window out of the scratchpad, leaving it as a regular floating window.
     ///
     /// A hidden window is shown on the active workspace first.

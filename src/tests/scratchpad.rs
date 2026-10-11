@@ -676,6 +676,39 @@ fn is_in_scratchpad_rule_sets_shown_geometry() {
     assert_eq!(errors.errors(), Vec::<String>::new());
 }
 
+#[test]
+fn toggle_window_in_scratchpad_bind() {
+    let (errors, _guard) = ErrorCollector::install();
+    let (mut f, id) = set_up_with_config(
+        r#"
+        binds {
+            Mod+Shift+Z repeat=false { toggle-window-in-scratchpad; }
+        }
+        "#,
+    );
+    let action = f.niri().config.borrow().binds.0[0].action.clone();
+    assert_eq!(action, Action::ToggleWindowInScratchpad);
+    map_window(&mut f, id, "a", None);
+
+    f.niri_state().do_action(action.clone(), false);
+    f.double_roundtrip(id);
+    assert_snapshot!(
+        format_windows(&mut f),
+        @"a: Hidden, floating: true, workspace: false, focused: false"
+    );
+
+    f.niri_state()
+        .do_action(Action::ScratchpadShow(None), false);
+    f.niri_state().do_action(action, false);
+    f.double_roundtrip(id);
+    assert_snapshot!(
+        format_windows(&mut f),
+        @"a: None, floating: true, workspace: true, focused: true"
+    );
+
+    assert_eq!(errors.errors(), Vec::<String>::new());
+}
+
 fn dd_window(f: &mut Fixture) -> smithay::desktop::Window {
     let mut windows = f.niri().layout.windows();
     let (_, mapped) = windows.find(|(_, mapped)| title(mapped) == "dd").unwrap();

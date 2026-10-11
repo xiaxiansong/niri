@@ -225,6 +225,41 @@ fn hidden_tiled_window_resizes_before_shown() {
     assert_snapshot!(floating_geometry(&layout, 3), @"pos: 256 288, size: 768 432");
 }
 
+fn toggle_in(id: Option<usize>) -> Op {
+    Op::ToggleWindowInScratchpad { id }
+}
+
+#[test]
+fn toggle_window_in_scratchpad() {
+    // A window that's not in the scratchpad is hidden.
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1, 100),
+        window(2, 100),
+        toggle_in(None),
+    ]);
+    assert_snapshot!(summary(&layout), @"hidden: [2], shown: [], focus: Some(1)");
+
+    // A shown window is taken out of the scratchpad, and stays where it is as a floating window.
+    check_ops_on_layout(&mut layout, [toggle(), Op::Communicate(2)]);
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [2], focus: Some(2)");
+    let before = floating_geometry(&layout, 2);
+    check_ops_on_layout(&mut layout, [toggle_in(None)]);
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [], focus: Some(2)");
+    assert_eq!(floating_geometry(&layout, 2), before);
+
+    // Then it goes back in.
+    check_ops_on_layout(&mut layout, [toggle_in(None)]);
+    assert_snapshot!(summary(&layout), @"hidden: [2], shown: [], focus: Some(1)");
+
+    // A hidden window is shown and taken out of the scratchpad.
+    check_ops_on_layout(&mut layout, [toggle_in(Some(2))]);
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [], focus: Some(2)");
+    let win = layout.windows().find(|(_, win)| win.0.id == 2).unwrap().1;
+    assert_eq!(win.scratchpad_state(), ScratchpadState::None);
+    floating_geometry(&layout, 2);
+}
+
 #[test]
 fn generic_toggle_cycles_through_queue() {
     let mut layout = check_ops([

@@ -355,6 +355,9 @@ pub enum Action {
     RemoveWindowFromScratchpad,
     #[knuffel(skip)]
     RemoveWindowFromScratchpadById(u64),
+    ToggleWindowInScratchpad,
+    #[knuffel(skip)]
+    ToggleWindowInScratchpadById(u64),
     #[knuffel(skip)]
     MoveFloatingWindowById {
         id: Option<u64>,
@@ -714,6 +717,12 @@ impl From<niri_ipc::Action> for Action {
             }
             niri_ipc::Action::RemoveWindowFromScratchpad { id: Some(id) } => {
                 Self::RemoveWindowFromScratchpadById(id)
+            }
+            niri_ipc::Action::ToggleWindowInScratchpad { id: None } => {
+                Self::ToggleWindowInScratchpad
+            }
+            niri_ipc::Action::ToggleWindowInScratchpad { id: Some(id) } => {
+                Self::ToggleWindowInScratchpadById(id)
             }
             niri_ipc::Action::MoveFloatingWindow { id, x, y } => {
                 Self::MoveFloatingWindowById { id, x, y }

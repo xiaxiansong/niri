@@ -2267,6 +2267,33 @@ impl State {
                     self.niri.queue_redraw_all();
                 }
             }
+            Action::ToggleWindowInScratchpad => {
+                if let Some(window) = self.niri.layout.toggle_window_in_scratchpad(None) {
+                    self.on_window_hidden_to_scratchpad(&window);
+                }
+                // FIXME: granular
+                self.niri.queue_redraw_all();
+            }
+            Action::ToggleWindowInScratchpadById(id) => {
+                let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
+                let window = window.map(|(_, m)| m.window.clone());
+                if let Some(window) = window {
+                    let active_output = self.niri.layout.active_output().cloned();
+                    let was_hidden = self.niri.layout.is_scratchpad_hidden(&window);
+
+                    if let Some(window) =
+                        self.niri.layout.toggle_window_in_scratchpad(Some(&window))
+                    {
+                        self.on_window_hidden_to_scratchpad(&window);
+                    } else if was_hidden && !self.niri.layout.is_scratchpad_hidden(&window) {
+                        // A hidden window gets shown and focused.
+                        self.move_cursor_after_scratchpad_focus(active_output);
+                    }
+
+                    // FIXME: granular
+                    self.niri.queue_redraw_all();
+                }
+            }
             Action::MoveFloatingWindowById { id, x, y } => {
                 let window = if let Some(id) = id {
                     let window = self.niri.layout.windows().find(|(_, m)| m.id().get() == id);
