@@ -92,6 +92,7 @@ pub struct Config {
     pub debug: Debug,
     pub workspaces: Vec<Workspace>,
     pub recent_windows: RecentWindows,
+    pub scratchpad: Scratchpad,
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +205,7 @@ where
                 "blur" => m_merge!(blur),
                 "gestures" => m_merge!(gestures),
                 "overview" => m_merge!(overview),
+                "scratchpad" => m_merge!(scratchpad),
                 "xwayland-satellite" => m_merge!(xwayland_satellite),
                 "switch-events" => m_merge!(switch_events),
                 "debug" => m_merge!(debug),
@@ -858,6 +860,10 @@ mod tests {
 
             hotkey-overlay {
                 skip-at-startup
+            }
+
+            scratchpad {
+                hide-on-focus-loss
             }
 
             animations {
@@ -2435,6 +2441,10 @@ mod tests {
                         hotkey_overlay_title: None,
                     },
                 ],
+            },
+            scratchpad: Scratchpad {
+                cycle_windows: false,
+                hide_on_focus_loss: true,
             },
         }
         "#);

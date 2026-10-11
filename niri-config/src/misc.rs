@@ -85,6 +85,26 @@ impl MergeWith<HotkeyOverlayPart> for HotkeyOverlay {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Scratchpad {
+    pub cycle_windows: bool,
+    pub hide_on_focus_loss: bool,
+}
+
+#[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ScratchpadPart {
+    #[knuffel(child)]
+    pub cycle_windows: Option<Flag>,
+    #[knuffel(child)]
+    pub hide_on_focus_loss: Option<Flag>,
+}
+
+impl MergeWith<ScratchpadPart> for Scratchpad {
+    fn merge_with(&mut self, part: &ScratchpadPart) {
+        merge!((self, part), cycle_windows, hide_on_focus_loss);
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ConfigNotification {
     pub disable_failed: bool,
 }
