@@ -193,8 +193,11 @@ The neighbor is the next column on screen, or the previous one when you resize t
 Proportion widths stay proportions, so the columns keep filling the screen when the working area changes.
 Both windows resize together, and the view stays in place.
 
-This applies to `set-column-width`, `set-window-width`, `switch-preset-column-width` and `switch-preset-window-width` (with their back variants), but not to interactive resizing with the mouse.
-Nothing changes compared to the default behavior when the columns on screen don't fill it exactly, when the neighbor can't get that narrow or wide because of its window's minimum or maximum size, when a column on screen is fullscreen or maximized, while you're scrolling the view with a gesture, or when the focused column is centered.
+This applies to `set-column-width`, `set-window-width`, `switch-preset-column-width` and `switch-preset-window-width` (with their back variants), and to resizing a column with the mouse by its left or right edge.
+With the mouse, the neighbor is the column on the side of the edge you drag, and dragging the outer edge of the first or last column on screen resizes like usual.
+The drag stops when either column reaches its minimum or maximum width.
+
+Nothing changes compared to the default behavior when the columns on screen don't fill it exactly, when the neighbor can't get that narrow or wide because of its window's minimum or maximum size (with an action), when a column on screen is fullscreen or maximized, while you're scrolling the view with a gesture, or when the focused column is centered.
 
 ```kdl
 layout {
