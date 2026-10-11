@@ -4210,6 +4210,18 @@ fn move_active_workspace_to_first_with_empty_workspace_above_first() {
     assert!(mon.active_workspace_ref().has_window(&2));
 }
 
+#[test]
+fn random_operations_dont_panic() {
+    // In debug builds, setting up the strategy for all of the ops takes more than the default
+    // 2 MiB of stack of test threads.
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(random_operations_dont_panic_inner)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: if std::env::var_os("RUN_SLOW_TESTS").is_none() {
@@ -4221,8 +4233,7 @@ proptest! {
         ..ProptestConfig::default()
     })]
 
-    #[test]
-    fn random_operations_dont_panic(
+    fn random_operations_dont_panic_inner(
         ops: Vec<Op>,
         layout_config in arbitrary_layout_part(),
         cycle_windows: bool,
