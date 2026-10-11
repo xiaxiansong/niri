@@ -10,6 +10,7 @@ layout {
     center-focused-column "never"
     always-center-single-column
     fill-view-after-removal
+    fill-view-after-resize
     empty-workspace-above-first
     default-column-display "tabbed"
     background-color "#003300"
@@ -158,6 +159,24 @@ This setting also has no effect when the focused column is centered (`center-foc
 ```kdl
 layout {
     fill-view-after-removal
+}
+```
+
+### `fill-view-after-resize`
+
+<sup>Since: next release</sup>
+
+If set, when a tiled column changes its width (for example with `set-column-width` or `switch-preset-column-width`), niri will scroll the view to remove any empty space that appeared past the first or the last column.
+For example, if you make the last column narrower while there are columns off-screen to the left, the view scrolls left to bring them in instead of leaving empty space on the right.
+
+The view moves once the window actually changes its size.
+During an interactive resize with the mouse the view stays in place, and the empty space is removed when you release the mouse button.
+
+Like [`fill-view-after-removal`](#fill-view-after-removal), this does not resize any windows, keeps the empty space on the right when all columns fit on screen, and does nothing while you're scrolling the view with a gesture, when the focused column is fullscreen or maximized, or when the focused column is centered.
+
+```kdl
+layout {
+    fill-view-after-resize
 }
 ```
 
