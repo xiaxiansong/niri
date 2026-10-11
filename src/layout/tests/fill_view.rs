@@ -30,9 +30,22 @@ fn make_options(fill: bool) -> Options {
 /// Runs the ops with fill-view-after-removal off and on, and returns the resulting view positions
 /// of the first workspace after completing the animations.
 fn off_on(options: Options, ops: &[Op]) -> String {
+    off_on_with(options, ops, |options, fill| {
+        options.layout.fill_view_after_removal = fill;
+    })
+}
+
+/// Same as [`off_on()`], but for fill-view-after-resize.
+fn resize_off_on(options: Options, ops: &[Op]) -> String {
+    off_on_with(options, ops, |options, fill| {
+        options.layout.fill_view_after_resize = fill;
+    })
+}
+
+fn off_on_with(options: Options, ops: &[Op], set: fn(&mut Options, bool)) -> String {
     let run = |fill| {
         let mut options = options.clone();
-        options.layout.fill_view_after_removal = fill;
+        set(&mut options, fill);
         let mut layout = check_ops_with_options(options, ops.iter().cloned());
         Op::CompleteAnimations.apply(&mut layout);
         first_ws_view_pos(&layout)
@@ -666,4 +679,144 @@ fn consume_into_column_fills_view() {
     let mut layout = check_ops_with_options(make_options(true), ops);
     Op::CompleteAnimations.apply(&mut layout);
     assert_active_column_visible(&layout);
+}
+
+fn set_width(id: usize, width: i32) -> [Op; 2] {
+    [
+        Op::SetWindowWidth {
+            id: Some(id),
+            change: SizeChange::SetFixed(width),
+        },
+        Op::Communicate(id),
+    ]
+}
+
+#[test]
+fn shrink_rightmost_column() {
+    let mut ops = four_columns_view_at_end();
+    ops.extend([
+        Op::FocusColumnLast,
+        Op::CompleteAnimations,
+        Op::SetWindowWidth {
+            id: None,
+            change: SizeChange::SetFixed(200),
+        },
+    ]);
+
+    // The view doesn't move until the window commits the new size.
+    assert_snapshot!(resize_off_on(Options::default(), &ops), @"off: 784, on: 784");
+
+    // The right snap is now at 1548 + 200 + 16 - 1280 = 484.
+    ops.push(Op::Communicate(4));
+    assert_snapshot!(resize_off_on(Options::default(), &ops), @"off: 784, on: 484");
+
+    let mut options = Options::default();
+    options.layout.fill_view_after_resize = true;
+    let mut layout = check_ops_with_options(options, ops);
+    Op::CompleteAnimations.apply(&mut layout);
+    assert_active_column_visible(&layout);
+
+    // Same when the focused column is the left neighbor.
+    let mut ops = four_columns_view_at_end();
+    ops.extend(set_width(4, 200));
+    assert_snapshot!(resize_off_on(Options::default(), &ops), @"off: 784, on: 484");
+}
+
+#[test]
+fn shrink_column_left_of_active() {
+    let mut ops = vec![
+        Op::AddOutput(1),
+        window(1, 500),
+        window(2, 500),
+        window(3, 500),
+        window(4, 500),
+        Op::FocusColumnFirst,
+        Op::FocusColumnRight,
+        Op::CompleteAnimations,
+    ];
+    ops.extend(set_width(1, 200));
+
+    // The view follows the active column, which exposes empty space on the left.
+    assert_snapshot!(resize_off_on(Options::default(), &ops), @"off: -316, on: -16");
+}
+
+#[test]
+fn shrink_until_columns_fit() {
+    // Three 500 px wide columns at x = 0, 516, 1032, the view at the right end.
+    let mut ops = vec![
+        Op::AddOutput(1),
+        window(1, 500),
+        window(2, 500),
+        window(3, 500),
+        Op::FocusColumnFirst,
+        Op::FocusColumnLast,
+        Op::CompleteAnimations,
+    ];
+    ops.extend(set_width(3, 200));
+    assert_snapshot!(resize_off_on(Options::default(), &ops), @"off: 268, on: -16");
+}
+
+#[test]
+fn grow_column_does_not_move_view() {
+    let mut ops = four_columns_view_at_end();
+    ops.extend(set_width(2, 700));
+    assert_snapshot!(resize_off_on(Options::default(), &ops), @"off: 984, on: 984");
+}
+
+#[test]
+fn interactive_resize_fills_view_at_end() {
+    let mut ops = four_columns_view_at_end();
+    ops.extend([
+        Op::FocusColumnLast,
+        Op::CompleteAnimations,
+        Op::InteractiveResizeBegin {
+            window: 4,
+            edges: ResizeEdge::RIGHT,
+        },
+        Op::InteractiveResizeUpdate {
+            window: 4,
+            dx: -300.,
+            dy: 0.,
+        },
+        Op::Communicate(4),
+    ]);
+
+    // The view stays in place during the resize.
+    assert_snapshot!(resize_off_on(Options::default(), &ops), @"off: 784, on: 784");
+
+    ops.push(Op::InteractiveResizeEnd { window: 4 });
+    assert_snapshot!(resize_off_on(Options::default(), &ops), @"off: 784, on: 484");
+}
+
+#[test]
+fn resize_with_centering_is_not_affected() {
+    let mut ops = four_columns_view_at_end();
+    ops.extend(set_width(4, 200));
+
+    let mut options = Options::default();
+    options.layout.center_focused_column = CenterFocusedColumn::Always;
+    assert_snapshot!(resize_off_on(options, &ops), @"off: 642, on: 642");
+}
+
+#[test]
+fn unfullscreen_keeps_view() {
+    let mut ops = four_columns_view_at_end();
+    ops.extend([
+        Op::FocusColumnLast,
+        Op::CompleteAnimations,
+        Op::FullscreenWindow(4),
+        Op::Communicate(4),
+        Op::CompleteAnimations,
+    ]);
+    assert_snapshot!(resize_off_on(Options::default(), &ops), @"off: 1548, on: 1548");
+
+    ops.extend([Op::FullscreenWindow(4), Op::Communicate(4)]);
+    assert_snapshot!(resize_off_on(Options::default(), &ops), @"off: 784, on: 784");
+}
+
+#[test]
+fn removal_flag_does_not_fill_view_after_resize() {
+    let mut ops = four_columns_view_at_end();
+    ops.extend(set_width(4, 200));
+    assert_snapshot!(off_on(Options::default(), &ops), @"off: 784, on: 784");
 }

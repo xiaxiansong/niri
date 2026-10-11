@@ -1283,6 +1283,11 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return;
         }
 
+        self.fill_view(self.options.animations.horizontal_view_movement.0);
+    }
+
+    /// Scrolls the view to remove empty space past the first or the last column.
+    fn fill_view(&mut self, config: niri_config::Animation) {
         if self.columns.is_empty()
             || self.view_offset.is_gesture()
             || self.interactive_resize.is_some()
@@ -1309,7 +1314,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             self.target_view_pos().clamp(left, right)
         };
         let new_offset = new_pos - self.column_x(self.active_column_idx);
-        self.animate_view_offset(self.active_column_idx, new_offset);
+        self.animate_view_offset_with_config(self.active_column_idx, new_offset, config);
     }
 
     pub fn update_window(&mut self, window: &W::Id, serial: Option<Serial>) {
@@ -1471,6 +1476,16 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 // resizing windows not look janky.
                 self.animate_view_offset_to_column_with_config(None, col_idx, None, config);
             }
+        }
+
+        // A column changing its width can expose empty space past the first or the last column.
+        if offset != 0. && self.options.layout.fill_view_after_resize {
+            let config = if ongoing_resize_anim {
+                self.options.animations.window_resize.anim
+            } else {
+                self.options.animations.horizontal_view_movement.0
+            };
+            self.fill_view(config);
         }
     }
 
@@ -3746,6 +3761,11 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         }
 
         self.interactive_resize = None;
+
+        // The view stayed in place during the resize, so there may be empty space to remove now.
+        if self.options.layout.fill_view_after_resize {
+            self.fill_view(self.options.animations.horizontal_view_movement.0);
+        }
     }
 
     pub fn refresh(&mut self, is_active: bool, is_focused: bool) {
