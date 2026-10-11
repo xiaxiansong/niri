@@ -753,6 +753,7 @@ mod tests {
                 warp-mouse-to-focus
                 focus-follows-mouse
                 workspace-auto-back-and-forth
+                focus-previous-window-on-close
 
                 mod-key "Mod5"
                 mod-key-nested "Super"
@@ -1169,6 +1170,7 @@ mod tests {
                     },
                 ),
                 workspace_auto_back_and_forth: true,
+                focus_previous_window_on_close: true,
                 mod_key: Some(
                     IsoLevel3Shift,
                 ),

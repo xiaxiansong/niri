@@ -21,6 +21,7 @@ pub struct Input {
     pub warp_mouse_to_focus: Option<WarpMouseToFocus>,
     pub focus_follows_mouse: Option<FocusFollowsMouse>,
     pub workspace_auto_back_and_forth: bool,
+    pub focus_previous_window_on_close: bool,
     pub mod_key: Option<ModKey>,
     pub mod_key_nested: Option<ModKey>,
 }
@@ -49,6 +50,8 @@ pub struct InputPart {
     pub focus_follows_mouse: Option<FocusFollowsMouse>,
     #[knuffel(child)]
     pub workspace_auto_back_and_forth: Option<Flag>,
+    #[knuffel(child)]
+    pub focus_previous_window_on_close: Option<Flag>,
     #[knuffel(child, unwrap(argument, str))]
     pub mod_key: Option<ModKey>,
     #[knuffel(child, unwrap(argument, str))]
@@ -62,6 +65,7 @@ impl MergeWith<InputPart> for Input {
             keyboard,
             disable_power_key_handling,
             workspace_auto_back_and_forth,
+            focus_previous_window_on_close,
         );
 
         merge_clone!(
