@@ -141,8 +141,9 @@ use crate::input::pick_color_grab::PickColorGrab;
 use crate::input::scroll_swipe_gesture::ScrollSwipeGesture;
 use crate::input::scroll_tracker::ScrollTracker;
 use crate::input::{
-    apply_libinput_settings, mods_with_finger_scroll_binds, mods_with_mouse_binds,
-    mods_with_tablet_stylus_binds, mods_with_wheel_binds, TabletData,
+    apply_libinput_settings, mods_with_finger_scroll_binds, mods_with_horizontal_wheel_binds,
+    mods_with_mouse_binds, mods_with_tablet_stylus_binds, mods_with_vertical_wheel_binds,
+    TabletData,
 };
 use crate::ipc::server::IpcServer;
 use crate::layer::mapped::LayerSurfaceRenderElement;
@@ -276,6 +277,9 @@ pub struct Niri {
     /// startup, libinput will immediately send a closed event.
     pub is_lid_closed: bool,
 
+    /// Runtime toggle for touchpad disabled state (combined with config.touchpad.off).
+    pub touchpad_disabled_by_toggle: bool,
+
     pub devices: HashSet<input::Device>,
     pub tablets: HashMap<input::Device, TabletData>,
     pub touch: HashSet<input::Device>,
@@ -397,7 +401,8 @@ pub struct Niri {
     pub vertical_wheel_tracker: ScrollTracker,
     pub horizontal_wheel_tracker: ScrollTracker,
     pub mods_with_mouse_binds: HashSet<Modifiers>,
-    pub mods_with_wheel_binds: HashSet<Modifiers>,
+    pub mods_with_horizontal_wheel_binds: HashSet<Modifiers>,
+    pub mods_with_vertical_wheel_binds: HashSet<Modifiers>,
     pub mods_with_tablet_stylus_binds: HashSet<Modifiers>,
     pub vertical_finger_scroll_tracker: ScrollTracker,
     pub horizontal_finger_scroll_tracker: ScrollTracker,
@@ -564,8 +569,10 @@ pub struct PointContents {
     pub window: Option<(Window, HitType)>,
     // If surface belongs to a layer surface, this is that layer surface.
     pub layer: Option<LayerSurface>,
-    // Pointer is over a hot corner.
+    // Point is over a hot corner.
     pub hot_corner: bool,
+    // Point is over the overview.
+    pub overview: bool,
 }
 
 #[derive(Debug, Default)]
@@ -1793,7 +1800,10 @@ impl State {
                 .hotkey_overlay
                 .on_hotkey_config_updated(new_mod_key);
             self.niri.mods_with_mouse_binds = mods_with_mouse_binds(new_mod_key, &config.binds);
-            self.niri.mods_with_wheel_binds = mods_with_wheel_binds(new_mod_key, &config.binds);
+            self.niri.mods_with_horizontal_wheel_binds =
+                mods_with_horizontal_wheel_binds(new_mod_key, &config.binds);
+            self.niri.mods_with_vertical_wheel_binds =
+                mods_with_vertical_wheel_binds(new_mod_key, &config.binds);
             self.niri.mods_with_tablet_stylus_binds =
                 mods_with_tablet_stylus_binds(new_mod_key, &config.binds);
             self.niri.mods_with_finger_scroll_binds =
@@ -1908,7 +1918,11 @@ impl State {
         if libinput_config_changed {
             let config = self.niri.config.borrow();
             for mut device in self.niri.devices.iter().cloned() {
-                apply_libinput_settings(&config.input, &mut device);
+                apply_libinput_settings(
+                    &config.input,
+                    &mut device,
+                    self.niri.touchpad_disabled_by_toggle,
+                );
             }
         }
 
@@ -2242,7 +2256,23 @@ impl State {
             return;
         };
 
-        // Now that we captured the screenshots, clear grabs like drag-and-drop, etc.
+        // Now that we captured the screenshots, clear grabs.
+        self.cancel_pointing_grabs();
+
+        self.backend.with_primary_renderer(|renderer| {
+            self.niri
+                .screenshot_ui
+                .open(renderer, screenshots, default_output, show_pointer, path)
+        });
+
+        self.niri
+            .cursor_manager
+            .set_cursor_image(CursorImageStatus::Named(CursorIcon::Crosshair));
+        self.niri.queue_redraw_all();
+    }
+
+    /// Cancel pointing device grabs like drag-and-drop, etc.
+    pub fn cancel_pointing_grabs(&mut self) {
         let time = InputTime::now();
         self.niri
             .seat
@@ -2256,17 +2286,6 @@ impl State {
         for tool in self.niri.seat.tablet_seat().get_tools().into_values() {
             tool.unset_grab(self, SERIAL_COUNTER.next_serial(), time);
         }
-
-        self.backend.with_primary_renderer(|renderer| {
-            self.niri
-                .screenshot_ui
-                .open(renderer, screenshots, default_output, show_pointer, path)
-        });
-
-        self.niri
-            .cursor_manager
-            .set_cursor_image(CursorImageStatus::Named(CursorIcon::Crosshair));
-        self.niri.queue_redraw_all();
     }
 
     pub fn handle_pick_color(&mut self, tx: async_channel::Sender<Option<niri_ipc::PickedColor>>) {
@@ -2688,7 +2707,10 @@ impl Niri {
 
         let mod_key = backend.mod_key(&config.borrow());
         let mods_with_mouse_binds = mods_with_mouse_binds(mod_key, &config_.binds);
-        let mods_with_wheel_binds = mods_with_wheel_binds(mod_key, &config_.binds);
+        let mods_with_horizontal_wheel_binds =
+            mods_with_horizontal_wheel_binds(mod_key, &config_.binds);
+        let mods_with_vertical_wheel_binds =
+            mods_with_vertical_wheel_binds(mod_key, &config_.binds);
         let mods_with_finger_scroll_binds = mods_with_finger_scroll_binds(mod_key, &config_.binds);
         let mods_with_tablet_stylus_binds = mods_with_tablet_stylus_binds(mod_key, &config_.binds);
 
@@ -2796,6 +2818,7 @@ impl Niri {
             blocker_cleared_rx,
             monitors_active: true,
             is_lid_closed: false,
+            touchpad_disabled_by_toggle: false,
 
             devices: HashSet::new(),
             tablets: HashMap::new(),
@@ -2878,7 +2901,8 @@ impl Niri {
             vertical_wheel_tracker: ScrollTracker::new(120),
             horizontal_wheel_tracker: ScrollTracker::new(120),
             mods_with_mouse_binds,
-            mods_with_wheel_binds,
+            mods_with_horizontal_wheel_binds,
+            mods_with_vertical_wheel_binds,
             mods_with_tablet_stylus_binds,
 
             // 10 is copied from Clutter: DISCRETE_SCROLL_STEP.
@@ -3719,6 +3743,7 @@ impl Niri {
                 .or_else(|| layer_toplevel_under(Layer::Background));
         } else {
             if self.is_inside_hot_corner(output, pos_within_output) {
+                rv.overview = is_overview_open;
                 rv.hot_corner = true;
                 return rv;
             }
@@ -3726,6 +3751,10 @@ impl Niri {
             under = under
                 .or_else(|| layer_popup_under(Layer::Top))
                 .or_else(|| layer_toplevel_under(Layer::Top));
+
+            if is_overview_open && under.is_none() {
+                rv.overview = true;
+            }
 
             under = under.or_else(interactive_moved_window_under);
 
@@ -6617,34 +6646,31 @@ impl Niri {
 
         info!("locking session");
 
+        // If we have outputs, we need to redraw them before locking. But before we do that,
+        // let's wait for the lock surfaces.
+        //
+        // Give them a second; swaylock can take its time to paint a big enough image.
+        let timer = Timer::from_duration(Duration::from_millis(1000));
+        let deadline_token = self
+            .event_loop
+            .insert_source(timer, |_, _, state| {
+                trace!("lock deadline expired, continuing");
+                state.niri.continue_to_locking();
+                TimeoutAction::Drop
+            })
+            .unwrap();
+
+        self.lock_state = LockState::WaitingForSurfaces {
+            confirmation,
+            deadline_token,
+        };
+
+        // If there are no outputs, we can lock right away.
+        //
+        // This does mean the deadline timer above is immediately removed, but it's a rare case,
+        // and consolidating the locking code into one place is worth it.
         if self.output_state.is_empty() {
-            // There are no outputs, lock the session right away.
-            self.screenshot_ui.close();
-            self.cursor_manager
-                .set_cursor_image(CursorImageStatus::default_named());
-
-            let lock = confirmation.ext_session_lock().clone();
-            confirmation.lock();
-            self.lock_state = LockState::Locked(lock);
-        } else {
-            // There are outputs which we need to redraw before locking. But before we do that,
-            // let's wait for the lock surfaces.
-            //
-            // Give them a second; swaylock can take its time to paint a big enough image.
-            let timer = Timer::from_duration(Duration::from_millis(1000));
-            let deadline_token = self
-                .event_loop
-                .insert_source(timer, |_, _, state| {
-                    trace!("lock deadline expired, continuing");
-                    state.niri.continue_to_locking();
-                    TimeoutAction::Drop
-                })
-                .unwrap();
-
-            self.lock_state = LockState::WaitingForSurfaces {
-                confirmation,
-                deadline_token,
-            };
+            self.continue_to_locking();
         }
     }
 
@@ -6683,6 +6709,12 @@ impl Niri {
                 self.cursor_manager
                     .set_cursor_image(CursorImageStatus::default_named());
                 self.cancel_mru();
+
+                // I don't like this being asynchronous, but it would be a bit involved to move
+                // this whole function to State. This should do for now.
+                self.event_loop.insert_idle(|state| {
+                    state.cancel_pointing_grabs();
+                });
 
                 if self.output_state.is_empty() {
                     // There are no outputs, lock the session right away.
