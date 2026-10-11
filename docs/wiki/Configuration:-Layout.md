@@ -11,6 +11,7 @@ layout {
     always-center-single-column
     fill-view-after-removal
     fill-view-after-resize
+    resize-neighbor-to-fill
     empty-workspace-above-first
     default-column-display "tabbed"
     background-color "#003300"
@@ -177,6 +178,27 @@ Like [`fill-view-after-removal`](#fill-view-after-removal), this does not resize
 ```kdl
 layout {
     fill-view-after-resize
+}
+```
+
+### `resize-neighbor-to-fill`
+
+<sup>Since: next release</sup>
+
+If set, when the columns on screen fill the working area exactly and you change the width of one of them, the neighboring column takes up the difference, so that they keep filling it.
+For example, with two half-width columns, making the right one 10% wider makes the left one 10% narrower, rather than pushing the right one past the edge of the screen.
+This works well with preset widths that add up to a whole, like `0.25`, `0.5` and `0.75`: switching one column to `0.75` turns its neighbor into `0.25`.
+
+The neighbor is the next column on screen, or the previous one when you resize the last column on screen.
+Proportion widths stay proportions, so the columns keep filling the screen when the working area changes.
+Both windows resize together, and the view stays in place.
+
+This applies to `set-column-width`, `set-window-width`, `switch-preset-column-width` and `switch-preset-window-width` (with their back variants), but not to interactive resizing with the mouse.
+Nothing changes compared to the default behavior when the columns on screen don't fill it exactly, when the neighbor can't get that narrow or wide because of its window's minimum or maximum size, when a column on screen is fullscreen or maximized, while you're scrolling the view with a gesture, or when the focused column is centered.
+
+```kdl
+layout {
+    resize-neighbor-to-fill
 }
 ```
 
