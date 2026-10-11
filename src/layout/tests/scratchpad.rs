@@ -125,11 +125,11 @@ fn tiled_window_first_shown_with_default_size() {
     // Like closing the column: the right snap is now at 1032 + 500 + 16 - 1280 = 268.
     assert_snapshot!(off_on(&setup), @"off: 784, on: 268");
 
-    // 60% of the 1280x720 working area. The window hasn't resized yet, so its 500x200 tile is
-    // centered.
+    // 60% of the 1280x720 working area, centered for that size even though the window hasn't
+    // resized yet.
     let mut layout = check_ops(setup);
     check_ops_on_layout(&mut layout, [toggle()]);
-    assert_snapshot!(floating_geometry(&layout, 4), @"pos: 390 260, size: 768 432");
+    assert_snapshot!(floating_geometry(&layout, 4), @"pos: 256 144, size: 768 432");
 
     // Window rules take precedence: 300 px wide, half of 720 px tall.
     let mut params = TestWindowParams::new(5);
@@ -144,7 +144,7 @@ fn tiled_window_first_shown_with_default_size() {
         hide(5),
         toggle(),
     ]);
-    assert_snapshot!(floating_geometry(&layout, 5), @"pos: 590 260, size: 300 360");
+    assert_snapshot!(floating_geometry(&layout, 5), @"pos: 490 180, size: 300 360");
 
     // Once the window is floating, its floating size is remembered.
     check_ops_on_layout(
@@ -162,6 +162,67 @@ fn tiled_window_first_shown_with_default_size() {
     );
     let size = layout.windows().next().unwrap().1.requested_size().unwrap();
     assert_eq!(size, Size::from((400, 360)));
+}
+
+#[test]
+fn hidden_tiled_window_resizes_before_shown() {
+    // Right after hiding, a tiled window is asked for 60% of the 1280x720 working area.
+    let mut layout = check_ops([Op::AddOutput(1), window(1, 500), hide(1)]);
+    let size = layout.windows().next().unwrap().1.requested_size().unwrap();
+    assert_eq!(size, Size::from((768, 432)));
+
+    // Whether or not the window has resized by the time it's shown, it's shown in the same place,
+    // centered for that size.
+    let mut resized = check_ops([
+        Op::AddOutput(1),
+        window(1, 500),
+        hide(1),
+        Op::Communicate(1),
+        toggle(),
+    ]);
+    check_ops_on_layout(&mut layout, [toggle()]);
+    assert_snapshot!(floating_geometry(&layout, 1), @"pos: 256 144, size: 768 432");
+    assert_snapshot!(floating_geometry(&resized, 1), @"pos: 256 144, size: 768 432");
+
+    // Showing doesn't ask for anything new.
+    check_ops_on_layout(&mut resized, [Op::Communicate(1)]);
+    let win = resized.windows().next().unwrap().1;
+    assert_eq!(win.requested_size(), Some(Size::from((768, 432))));
+
+    // A window that was floating before keeps its floating size and position, and is asked for
+    // that size right away too.
+    let layout = check_ops([
+        Op::AddOutput(1),
+        floating_window(2),
+        Op::Communicate(2),
+        Op::ToggleWindowFloating { id: Some(2) },
+        Op::Communicate(2),
+        hide(2),
+    ]);
+    let size = layout.windows().next().unwrap().1.requested_size().unwrap();
+    assert_eq!(size, Size::from((100, 200)));
+    let mut layout = layout;
+    check_ops_on_layout(&mut layout, [toggle()]);
+    assert_snapshot!(floating_geometry(&layout, 2), @"pos: 590 260, size: 100 200");
+
+    // The default-floating-position rule places it by its new size too.
+    let mut params = TestWindowParams::new(3);
+    params.bbox = Rectangle::from_size(Size::from((500, 200)));
+    params.rules = Some(ResolvedWindowRules {
+        default_floating_position: Some(niri_config::FloatingPosition {
+            x: niri_config::FloatOrInt(0.),
+            y: niri_config::FloatOrInt(0.),
+            relative_to: niri_config::RelativeTo::Bottom,
+        }),
+        ..ResolvedWindowRules::default()
+    });
+    let layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow { params },
+        hide(3),
+        toggle(),
+    ]);
+    assert_snapshot!(floating_geometry(&layout, 3), @"pos: 256 288, size: 768 432");
 }
 
 #[test]
@@ -364,13 +425,13 @@ fn hidden_windows_survive_output_removal() {
 
 #[test]
 fn hidden_window_commit_does_not_animate() {
-    // The window was asked to resize to the column size, but hasn't committed yet.
+    // The window was asked to resize to its floating size on hiding, but hasn't committed yet.
     let mut layout = check_ops([Op::AddOutput(1), window(1, 100), hide(1)]);
 
     // Committing the new size would start a resize animation.
     check_ops_on_layout(&mut layout, [Op::Communicate(1)]);
     let tile = &layout.scratchpad.hidden[0];
-    assert_eq!(tile.window().size(), Size::from((100, 688)));
+    assert_eq!(tile.window().size(), Size::from((768, 432)));
     assert!(!tile.are_transitions_ongoing());
 }
 

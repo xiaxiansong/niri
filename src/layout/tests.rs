@@ -968,7 +968,12 @@ impl Op {
                     is_floating,
                     ActivateWindow::No,
                 );
-                layout.move_new_window_to_scratchpad(&id, show);
+                // Like the map handler, prepare the window when it ends up hidden.
+                if layout.move_new_window_to_scratchpad(&id, show)
+                    && layout.is_scratchpad_hidden(&id)
+                {
+                    layout.prepare_hidden_scratchpad_window(&id);
+                }
             }
             Op::AddWindowNextTo {
                 mut params,
@@ -1437,11 +1442,17 @@ impl Op {
                 let id = id.filter(|id| layout.has_window(id));
                 layout.move_floating_window(id.as_ref(), x, y, animate);
             }
+            // Like the niri side, prepare windows right after hiding them.
             Op::MoveWindowToScratchpad { id } => {
-                layout.move_to_scratchpad(id.as_ref());
+                if let Some(id) = layout.move_to_scratchpad(id.as_ref()) {
+                    layout.prepare_hidden_scratchpad_window(&id);
+                }
             }
             Op::ToggleScratchpad { id } => {
-                layout.toggle_scratchpad(|win| id.is_none_or(|id| win.0.id == id));
+                let res = layout.toggle_scratchpad(|win| id.is_none_or(|id| win.0.id == id));
+                if let ScratchpadToggle::Hidden(id) = res {
+                    layout.prepare_hidden_scratchpad_window(&id);
+                }
             }
             Op::RemoveWindowFromScratchpad { id } => {
                 layout.remove_from_scratchpad(id.as_ref());

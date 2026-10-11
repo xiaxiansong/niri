@@ -3713,28 +3713,6 @@ impl<W: LayoutElement> Layout<W> {
         } = ws.remove_tile(&id, Transaction::new());
 
         if !is_floating {
-            // The scratchpad shows windows as floating. Don't use the tiled size for this.
-            if tile.floating_window_size.is_none() {
-                let win = tile.window();
-                let rules = win.rules();
-                let width = match rules.default_width {
-                    Some(Some(width)) => width,
-                    _ => PresetSize::Proportion(0.6),
-                };
-                let height = match rules.default_height {
-                    Some(Some(height)) => height,
-                    _ => PresetSize::Proportion(0.6),
-                };
-                let size = ws.new_window_size(
-                    Some(width),
-                    Some(height),
-                    true,
-                    rules,
-                    (win.min_size(), win.max_size()),
-                );
-                tile.floating_window_size = Some(size);
-            }
-
             ws.fill_view_after_removal();
         }
 
@@ -3783,6 +3761,36 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         Some(id)
+    }
+
+    /// Decides where a hidden scratchpad window will be shown, and asks it for its size there.
+    ///
+    /// Call this right after hiding the window, once its window rules know that it's in the
+    /// scratchpad. The window then resizes while it's hidden, rather than right after it's shown.
+    pub fn prepare_hidden_scratchpad_window(&mut self, window: &W::Id) {
+        let MonitorSet::Normal {
+            monitors,
+            active_monitor_idx,
+            ..
+        } = &self.monitor_set
+        else {
+            return;
+        };
+
+        let Some(tile) = self
+            .scratchpad
+            .hidden
+            .iter_mut()
+            .find(|tile| tile.window().id() == window)
+        else {
+            return;
+        };
+
+        // Showing puts the window on the active workspace.
+        let mon = &monitors[*active_monitor_idx];
+        let ws = &mon.workspaces[mon.active_workspace_idx];
+        let size = place_hidden_scratchpad_tile(tile, ws);
+        tile.window_mut().request_size_once(size, true);
     }
 
     /// Returns the output where the hidden scratchpad window is animating out, if any.
@@ -3866,6 +3874,8 @@ impl<W: LayoutElement> Layout<W> {
         let mon = &mut monitors[*active_monitor_idx];
         let ws_idx = mon.active_workspace_idx;
         let ws = &mut mon.workspaces[ws_idx];
+        // In case the window wasn't prepared when it was hidden.
+        place_hidden_scratchpad_tile(&mut tile, ws);
         ws.add_scratchpad_tile(tile, activate, true);
         mon.ensure_empty_workspaces_after_add(ws_idx);
 
@@ -5987,6 +5997,55 @@ impl<W: LayoutElement> Default for MonitorSet<W> {
 fn set_tile_scratchpad<W: LayoutElement>(tile: &mut Tile<W>, state: ScratchpadState) {
     tile.in_scratchpad = state != ScratchpadState::None;
     tile.window_mut().set_scratchpad_state(state);
+}
+
+/// Decides the floating size and position that a hidden scratchpad tile is shown with on `ws`, if
+/// it doesn't have them yet.
+///
+/// A window that was floating keeps its size and position. A window that was tiled gets the size
+/// from the `default-column-width` and `default-window-height` window rules, or 60% of the working
+/// area, and opens where a floating window of that size would.
+///
+/// Returns the floating window size.
+fn place_hidden_scratchpad_tile<W: LayoutElement>(
+    tile: &mut Tile<W>,
+    ws: &Workspace<W>,
+) -> Size<i32, Logical> {
+    let size = tile.floating_window_size.unwrap_or_else(|| {
+        let win = tile.window();
+        let rules = win.rules();
+        let width = match rules.default_width {
+            Some(Some(width)) => width,
+            _ => PresetSize::Proportion(0.6),
+        };
+        let height = match rules.default_height {
+            Some(Some(height)) => height,
+            _ => PresetSize::Proportion(0.6),
+        };
+        ws.new_window_size(
+            Some(width),
+            Some(height),
+            true,
+            rules,
+            (win.min_size(), win.max_size()),
+        )
+    });
+    tile.floating_window_size = Some(size);
+
+    if tile.floating_pos.is_none() {
+        // Place it by the size it will have, not by the tiled size it may still have.
+        let mut tile_size = size.to_f64();
+        if let Some(width) = tile.effective_border_width() {
+            tile_size.w += width * 2.;
+            tile_size.h += width * 2.;
+        }
+
+        let floating = ws.floating();
+        let pos = floating.default_tile_pos(tile, tile_size);
+        tile.floating_pos = Some(floating.logical_to_size_frac(pos));
+    }
+
+    size
 }
 
 /// Cleans up the workspace at `idx` after removing a window from it, with no outputs.
