@@ -14,7 +14,7 @@ use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
 use super::monitor::InsertPosition;
 use super::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
 use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
-use super::workspace::{InteractiveResize, ResolvedSize};
+use super::workspace::{InteractiveResize, ResizeNeighbor, ResolvedSize};
 use super::{ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Options, RemovedTile};
 use crate::animation::{Animation, Clock};
 use crate::input::swipe_tracker::SwipeTracker;
@@ -1349,6 +1349,13 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         let offset = prev_width - self.data[col_idx].width;
 
+        // When a neighbor takes up the width change of an interactive resize, the view stays in
+        // place. A column left of the active one moves the active one, so move the view with it.
+        let with_neighbor = resize.is_some_and(|resize| resize.with_neighbor);
+        if offset != 0. && with_neighbor && col_idx < self.active_column_idx {
+            self.view_offset.offset(offset);
+        }
+
         // Move other columns in tandem with resizing.
         let ongoing_resize_anim = column.tiles[tile_idx].resize_animation().is_some();
         if offset != 0. {
@@ -1426,7 +1433,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     let new_offset =
                         -(self.working_area.size.w - width) / 2. - self.working_area.loc.x;
                     new_offset - self.view_offset.target()
-                } else if resize.edges.contains(ResizeEdge::LEFT) {
+                } else if resize.edges.contains(ResizeEdge::LEFT) && !resize.with_neighbor {
                     -offset
                 } else {
                     0.
@@ -2860,13 +2867,61 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     /// Returns the neighbor that should take up a width change of the column, and the view
     /// position to keep.
     ///
-    /// This is when resize-neighbor-to-fill is on, and the column is one of several columns that
-    /// fill the working area exactly. The neighbor is the next visible column, or the previous
-    /// one for the last visible column.
+    /// The neighbor is the next visible column, or the previous one for the last visible column.
     fn neighbor_to_fill(&self, col_idx: usize) -> Option<(usize, f64)> {
+        if self.interactive_resize.is_some() {
+            return None;
+        }
+
+        let (first, last, view_pos) = self.columns_filling_view()?;
+        if !(first..=last).contains(&col_idx) {
+            return None;
+        }
+
+        let neighbor = if col_idx < last {
+            col_idx + 1
+        } else {
+            col_idx - 1
+        };
+        Some((neighbor, view_pos))
+    }
+
+    /// Returns the neighbor that should take up the width change of an interactive resize of the
+    /// column by these edges.
+    ///
+    /// The neighbor is the visible column on the side of the resized edge.
+    fn resize_neighbor(&self, col_idx: usize, edges: ResizeEdge) -> Option<ResizeNeighbor<W>> {
+        let neighbor_idx = if edges.contains(ResizeEdge::LEFT_RIGHT) {
+            return None;
+        } else if edges.contains(ResizeEdge::LEFT) {
+            col_idx.checked_sub(1)?
+        } else if edges.contains(ResizeEdge::RIGHT) {
+            col_idx + 1
+        } else {
+            return None;
+        };
+
+        let (first, last, _) = self.columns_filling_view()?;
+        if !(first..=last).contains(&col_idx) || !(first..=last).contains(&neighbor_idx) {
+            return None;
+        }
+
+        let neighbor = &self.columns[neighbor_idx];
+        Some(ResizeNeighbor {
+            window: neighbor.tiles[0].window().id().clone(),
+            original_width: self.columns[col_idx].expected_width(),
+            original_neighbor_width: neighbor.expected_width(),
+        })
+    }
+
+    /// Returns the first and the last of several visible columns that fill the working area
+    /// exactly, and the view position.
+    ///
+    /// This is only when resize-neighbor-to-fill is on, since it's what the neighbor resizing
+    /// needs.
+    fn columns_filling_view(&self) -> Option<(usize, usize, f64)> {
         if !self.options.layout.resize_neighbor_to_fill
             || self.view_offset.is_gesture()
-            || self.interactive_resize.is_some()
             || self.is_centering_focused_column()
         {
             return None;
@@ -2893,7 +2948,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .last()
             .unwrap();
 
-        if first == last || !(first..=last).contains(&col_idx) {
+        if first == last {
             return None;
         }
 
@@ -2911,12 +2966,36 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return None;
         }
 
-        let neighbor = if col_idx < last {
-            col_idx + 1
+        Some((first, last, view_pos))
+    }
+
+    /// Resizes the column by `dx` from its width when the interactive resize began, and the
+    /// neighbor the other way, so that they keep their total width.
+    ///
+    /// The resize stops when either column reaches its minimum or maximum width.
+    fn resize_with_neighbor(
+        &mut self,
+        col_idx: usize,
+        neighbor_idx: usize,
+        neighbor: (f64, f64),
+        dx: f64,
+    ) {
+        let (width, neighbor_width) = neighbor;
+        let (min, max) = self.columns[col_idx].expected_width_range();
+        let (neighbor_min, neighbor_max) = self.columns[neighbor_idx].expected_width_range();
+
+        let lo = f64::max(min - width, neighbor_width - neighbor_max);
+        let hi = f64::min(max - width, neighbor_width - neighbor_min);
+        let dx = if lo <= hi {
+            dx.round().clamp(lo, hi)
         } else {
-            col_idx - 1
+            0.
         };
-        Some((neighbor, view_pos))
+
+        // Resize both columns in one transaction, so that they never overflow or leave a gap.
+        let transaction = Transaction::new();
+        self.columns[col_idx].set_expected_width_clamped(width + dx, transaction.clone());
+        self.columns[neighbor_idx].set_expected_width_clamped(neighbor_width - dx, transaction);
     }
 
     pub fn toggle_window_height(&mut self, window: Option<&W::Id>, forwards: bool) {
@@ -3760,11 +3839,12 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return false;
         }
 
-        let col = self
+        let col_idx = self
             .columns
-            .iter_mut()
-            .find(|col| col.contains(&window))
+            .iter()
+            .position(|col| col.contains(&window))
             .unwrap();
+        let col = &self.columns[col_idx];
 
         if !col.pending_sizing_mode().is_normal() {
             return false;
@@ -3772,20 +3852,27 @@ impl<W: LayoutElement> ScrollingSpace<W> {
 
         let tile = col
             .tiles
-            .iter_mut()
+            .iter()
             .find(|tile| tile.window().id() == &window)
             .unwrap();
 
         let original_window_size = tile.window_size();
 
+        self.view_offset.stop_anim_and_gesture();
+
+        // Look for the neighbor after stopping the view, since the view stays where it is now.
+        let neighbor = self.resize_neighbor(col_idx, edges);
+
         let resize = InteractiveResize {
             window,
             original_window_size,
-            data: InteractiveResizeData { edges },
+            data: InteractiveResizeData {
+                edges,
+                with_neighbor: neighbor.is_some(),
+            },
+            neighbor,
         };
         self.interactive_resize = Some(resize);
-
-        self.view_offset.stop_anim_and_gesture();
 
         true
     }
@@ -3803,53 +3890,87 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             return false;
         }
 
+        let edges = resize.data.edges;
+        let original_window_size = resize.original_window_size;
+        let neighbor = resize.neighbor.as_ref().map(|neighbor| {
+            (
+                neighbor.window.clone(),
+                neighbor.original_width,
+                neighbor.original_neighbor_width,
+            )
+        });
+
         let is_centering = self.is_centering_focused_column();
 
-        let col = self
+        let col_idx = self
             .columns
-            .iter_mut()
-            .find(|col| col.contains(window))
+            .iter()
+            .position(|col| col.contains(window))
             .unwrap();
 
-        let tile_idx = col
+        let tile_idx = self.columns[col_idx]
             .tiles
             .iter()
             .position(|tile| tile.window().id() == window)
             .unwrap();
 
-        if resize.data.edges.intersects(ResizeEdge::LEFT_RIGHT) {
+        if edges.intersects(ResizeEdge::LEFT_RIGHT) {
             let mut dx = delta.x;
-            if resize.data.edges.contains(ResizeEdge::LEFT) {
+            if edges.contains(ResizeEdge::LEFT) {
                 dx = -dx;
             };
 
-            if is_centering {
-                dx *= 2.;
-            }
+            // The neighbor must still be next to the column on the side of the resized edge.
+            let neighbor = neighbor.and_then(|(id, width, neighbor_width)| {
+                let neighbor_idx = self.columns.iter().position(|col| col.contains(&id))?;
+                let is_next_to = if edges.contains(ResizeEdge::LEFT) {
+                    neighbor_idx + 1 == col_idx
+                } else {
+                    neighbor_idx == col_idx + 1
+                };
+                is_next_to.then_some((neighbor_idx, (width, neighbor_width)))
+            });
 
-            let window_width = (resize.original_window_size.w + dx).round() as i32;
-            col.set_column_width(
-                SizeChange::SetFixed(window_width),
-                Some(tile_idx),
-                false,
-                Transaction::new(),
-            );
+            if let Some((neighbor_idx, widths)) = neighbor {
+                self.resize_with_neighbor(col_idx, neighbor_idx, widths, dx);
+            } else {
+                // The neighbor went away, so continue like a normal resize.
+                let resize = self.interactive_resize.as_mut().unwrap();
+                resize.neighbor = None;
+                resize.data.with_neighbor = false;
+
+                if is_centering {
+                    dx *= 2.;
+                }
+
+                let window_width = (original_window_size.w + dx).round() as i32;
+                self.columns[col_idx].set_column_width(
+                    SizeChange::SetFixed(window_width),
+                    Some(tile_idx),
+                    false,
+                    Transaction::new(),
+                );
+            }
         }
 
-        if resize.data.edges.intersects(ResizeEdge::TOP_BOTTOM) {
+        if edges.intersects(ResizeEdge::TOP_BOTTOM) {
             // Prevent the simplest case of weird resizing (top edge when this is the topmost
             // window).
-            if !(resize.data.edges.contains(ResizeEdge::TOP) && tile_idx == 0) {
+            if !(edges.contains(ResizeEdge::TOP) && tile_idx == 0) {
                 let mut dy = delta.y;
-                if resize.data.edges.contains(ResizeEdge::TOP) {
+                if edges.contains(ResizeEdge::TOP) {
                     dy = -dy;
                 };
 
                 // FIXME: some smarter height distribution would be nice here so that vertical
                 // resizes work as expected in more cases.
 
-                let window_height = (resize.original_window_size.h + dy).round() as i32;
-                col.set_window_height(SizeChange::SetFixed(window_height), Some(tile_idx), false);
+                let window_height = (original_window_size.h + dy).round() as i32;
+                self.columns[col_idx].set_window_height(
+                    SizeChange::SetFixed(window_height),
+                    Some(tile_idx),
+                    false,
+                );
             }
         }
 
@@ -3886,6 +4007,19 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             if let Some(resize) = &self.interactive_resize {
                 if col.contains(&resize.window) {
                     col_resize_data = Some(resize.data);
+                } else if let Some(neighbor) = &resize.neighbor {
+                    if col.contains(&neighbor.window) {
+                        // The neighbor resizes by its edge facing the resized column.
+                        let edges = if resize.data.edges.contains(ResizeEdge::LEFT) {
+                            ResizeEdge::RIGHT
+                        } else {
+                            ResizeEdge::LEFT
+                        };
+                        col_resize_data = Some(InteractiveResizeData {
+                            edges,
+                            with_neighbor: true,
+                        });
+                    }
                 }
             }
 
@@ -5284,13 +5418,35 @@ impl<W: LayoutElement> Column<W> {
     /// windows can't be that wide.
     fn set_expected_width(&mut self, width: f64, transaction: Transaction) -> bool {
         let (min_width, max_width) = self.min_max_width();
-        let gaps = self.options.layout.gaps;
-        let extra = self.extra_size().w;
-
-        let tile_width = width - extra;
+        let tile_width = width - self.extra_size().w;
         if tile_width < min_width || max_width < tile_width {
             return false;
         }
+
+        self.set_tile_width(tile_width, true, transaction)
+    }
+
+    /// Like [`Self::set_expected_width()`], but limits the width to what the windows can be, and
+    /// doesn't animate (for interactive resizes).
+    fn set_expected_width_clamped(&mut self, width: f64, transaction: Transaction) {
+        let (min_width, max_width) = self.min_max_width();
+        let tile_width = (width - self.extra_size().w).clamp(min_width, max_width);
+        self.set_tile_width(tile_width, false, transaction);
+    }
+
+    /// Returns the smallest and the largest width the column can have in the normal sizing mode.
+    fn expected_width_range(&self) -> (f64, f64) {
+        let (min_width, max_width) = self.min_max_width();
+        let extra = self.extra_size().w;
+        (min_width + extra, max_width + extra)
+    }
+
+    /// Sets the column width so that its tiles are `tile_width` wide.
+    ///
+    /// A proportion width stays a proportion.
+    fn set_tile_width(&mut self, tile_width: f64, animate: bool, transaction: Transaction) -> bool {
+        let gaps = self.options.layout.gaps;
+        let extra = self.extra_size().w;
 
         self.width = match self.width {
             ColumnWidth::Proportion(_) => {
@@ -5304,7 +5460,7 @@ impl<W: LayoutElement> Column<W> {
         };
         self.preset_width_idx = None;
         self.is_full_width = false;
-        self.update_tile_sizes_with_transaction(true, transaction);
+        self.update_tile_sizes_with_transaction(animate, transaction);
         true
     }
 
@@ -5938,7 +6094,11 @@ fn cancel_resize_for_column<W: LayoutElement>(
     column: &mut Column<W>,
 ) {
     if let Some(resize) = interactive_resize {
-        if column.contains(&resize.window) {
+        let is_neighbor = resize
+            .neighbor
+            .as_ref()
+            .is_some_and(|neighbor| column.contains(&neighbor.window));
+        if column.contains(&resize.window) || is_neighbor {
             *interactive_resize = None;
         }
     }

@@ -163,6 +163,19 @@ pub(super) struct InteractiveResize<W: LayoutElement> {
     pub window: W::Id,
     pub original_window_size: Size<f64, Logical>,
     pub data: InteractiveResizeData,
+    /// Column resizing the other way, with resize-neighbor-to-fill.
+    pub neighbor: Option<ResizeNeighbor<W>>,
+}
+
+/// Neighboring column that takes up the width change of an interactive resize.
+#[derive(Debug)]
+pub(super) struct ResizeNeighbor<W: LayoutElement> {
+    /// A window in the neighboring column.
+    pub window: W::Id,
+    /// Width of the resized column when the resize began.
+    pub original_width: f64,
+    /// Width of the neighboring column when the resize began.
+    pub original_neighbor_width: f64,
 }
 
 /// Resolved width or height in logical pixels.

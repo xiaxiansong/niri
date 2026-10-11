@@ -1085,3 +1085,189 @@ fn neighbor_with_centering_is_not_affected() {
     on: 269+742 -363+616
     ");
 }
+
+/// Drags the edges of the window by `dx`, and lets both windows commit.
+fn drag(window: usize, edges: ResizeEdge, dx: f64) -> Vec<Op> {
+    vec![
+        Op::InteractiveResizeBegin { window, edges },
+        Op::InteractiveResizeUpdate { window, dx, dy: 0. },
+        Op::Refresh { is_active: true },
+        Op::Communicate(1),
+        Op::Communicate(2),
+        Op::Communicate(3),
+    ]
+}
+
+/// Lets go of the window.
+fn release(window: usize) -> [Op; 2] {
+    [
+        Op::InteractiveResizeEnd { window },
+        Op::Refresh { is_active: true },
+    ]
+}
+
+#[test]
+fn neighbor_drag_right_edge() {
+    // The right neighbor gets narrower, and the left column stays in place.
+    let mut ops = two_halves();
+    ops.extend([Op::FocusColumnLeft, Op::CompleteAnimations]);
+    ops.extend(drag(1, ResizeEdge::RIGHT, 100.));
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 16+716 748+616
+    on: 16+716 748+516
+    ");
+
+    // Same after letting go.
+    ops.extend(release(1));
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 16+716 748+616
+    on: 16+716 748+516
+    ");
+}
+
+#[test]
+fn neighbor_drag_left_edge() {
+    // The left neighbor gets narrower, and the view stays in place.
+    let mut ops = two_halves();
+    ops.extend(drag(2, ResizeEdge::LEFT, -100.));
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 548+716 -84+616
+    on: 548+716 16+516
+    ");
+
+    // Same after letting go.
+    ops.extend(release(2));
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 548+716 -84+616
+    on: 548+716 16+516
+    ");
+}
+
+#[test]
+fn neighbor_drag_left_edge_of_unfocused_column() {
+    // The neighbor is the focused column, and the view stays in place.
+    let mut ops = two_halves();
+    ops.extend([Op::FocusColumnLeft, Op::CompleteAnimations]);
+    ops.extend(drag(2, ResizeEdge::LEFT, 100.));
+    ops.extend(release(2));
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 16+616 648+516
+    on: 16+716 748+516
+    ");
+}
+
+#[test]
+fn neighbor_drag_in_steps_before_commit() {
+    // The drag distance counts from the start of the resize, also before the windows commit.
+    let mut ops = two_halves();
+    ops.extend([
+        Op::InteractiveResizeBegin {
+            window: 2,
+            edges: ResizeEdge::LEFT,
+        },
+        Op::InteractiveResizeUpdate {
+            window: 2,
+            dx: -50.,
+            dy: 0.,
+        },
+        Op::InteractiveResizeUpdate {
+            window: 2,
+            dx: -100.,
+            dy: 0.,
+        },
+        Op::Refresh { is_active: true },
+        Op::Communicate(1),
+        Op::Communicate(2),
+        Op::InteractiveResizeUpdate {
+            window: 2,
+            dx: -150.,
+            dy: 0.,
+        },
+    ]);
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 498+766 -134+616
+    on: 498+766 16+466
+    ");
+}
+
+#[test]
+fn neighbor_drag_stops_at_min_width() {
+    // The left window can't be narrower than 600 px, so the drag stops there.
+    let mut params = TestWindowParams::new(1);
+    params.bbox = Rectangle::from_size(Size::from((500, 200)));
+    params.min_max_size = (Size::from((600, 0)), Size::from((0, 0)));
+    let mut ops = vec![
+        Op::AddOutput(1),
+        Op::AddWindow { params },
+        proportion(50.),
+        window(2, 500),
+        proportion(50.),
+        Op::Communicate(1),
+        Op::Communicate(2),
+        // Move the view to the committed widths.
+        Op::FocusColumnFirst,
+        Op::FocusColumnLast,
+        Op::CompleteAnimations,
+    ];
+    ops.extend(drag(2, ResizeEdge::LEFT, -100.));
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 548+716 -84+616
+    on: 632+632 16+600
+    ");
+}
+
+#[test]
+fn neighbor_drag_outer_edge() {
+    // There's no visible neighbor past the last column, so it resizes like usual.
+    let mut ops = two_halves();
+    ops.extend(drag(2, ResizeEdge::RIGHT, -100.));
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 648+516 16+616
+    on: 648+516 16+616
+    ");
+}
+
+#[test]
+fn neighbor_drag_when_not_filling() {
+    // The columns don't fill the view, so the drag resizes like usual.
+    let ops = vec![
+        Op::AddOutput(1),
+        window(1, 500),
+        proportion(25.),
+        window(2, 500),
+        proportion(25.),
+        Op::Communicate(1),
+        Op::Communicate(2),
+        Op::FocusColumnFirst,
+        Op::CompleteAnimations,
+    ];
+    let mut ops = ops;
+    ops.extend(drag(1, ResizeEdge::RIGHT, 100.));
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 216+400 632+300
+    on: 216+400 632+300
+    ");
+}
+
+#[test]
+fn neighbor_drag_cancelled_by_neighbor_resize() {
+    // Resizing the neighbor with an action stops the interactive resize, so the last update does
+    // nothing.
+    let mut ops = two_halves();
+    ops.extend(drag(2, ResizeEdge::LEFT, -100.));
+    ops.extend([
+        Op::SetWindowWidth {
+            id: Some(1),
+            change: SizeChange::SetProportion(50.),
+        },
+        Op::InteractiveResizeUpdate {
+            window: 2,
+            dx: -200.,
+            dy: 0.,
+        },
+    ]);
+    assert_snapshot!(neighbor_off_on(Options::default(), &ops), @"
+    off: 448+816 -184+616
+    on: 548+716 -84+616
+    ");
+}

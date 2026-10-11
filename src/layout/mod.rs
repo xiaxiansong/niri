@@ -534,6 +534,10 @@ enum DndHoldTarget<WindowId> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InteractiveResizeData {
     pub(self) edges: ResizeEdge,
+    /// Whether a neighboring column resizes the other way to keep the view filled.
+    ///
+    /// Both columns get this, and the view stays in place instead of following either edge.
+    pub(self) with_neighbor: bool,
 }
 
 #[derive(Debug, Clone, Copy)]

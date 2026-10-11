@@ -1180,7 +1180,11 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let resize = InteractiveResize {
             window,
             original_window_size,
-            data: InteractiveResizeData { edges },
+            data: InteractiveResizeData {
+                edges,
+                with_neighbor: false,
+            },
+            neighbor: None,
         };
         self.interactive_resize = Some(resize);
 
