@@ -152,25 +152,26 @@ fn hidden_window_keeps_committing() {
         @"a: Hidden, floating: true, workspace: false, focused: false"
     );
 
-    // Hiding drops the Activated state. The size request stays the same (the tiled size), and
-    // the bounds are left as is.
+    // Hiding drops the Activated state and right away requests the size the window will be
+    // shown with, 60% of the working area, so that it can resize while hidden. The bounds are
+    // left as is.
     let window = f.client(id).window(&surface);
     assert_snapshot!(
         window.format_recent_configures(),
-        @"size: 936 × 1048, bounds: 1888 × 1048, states: []"
+        @"size: 1152 × 648, bounds: 1888 × 1048, states: []"
     );
 
-    // The client acks and commits with a new size while hidden.
-    window.set_size(200, 200);
+    // The client acks and commits with the new size while hidden.
+    window.set_size(1152, 648);
     window.ack_last_and_commit();
     f.double_roundtrip(id);
 
     let window = f.client(id).window(&surface);
     assert_snapshot!(window.format_recent_configures(), @"");
     let size = f.niri().layout.windows().next().unwrap().1.size();
-    assert_eq!((size.w, size.h), (200, 200));
+    assert_eq!((size.w, size.h), (1152, 648));
 
-    // Showing requests 60% of the working area as the first floating size.
+    // Showing doesn't change the size anymore, so the window doesn't resize on screen.
     f.niri_state()
         .do_action(Action::ScratchpadShow(None), false);
     f.double_roundtrip(id);
@@ -626,6 +627,51 @@ fn open_in_scratchpad_rule() {
         window.format_recent_configures(),
         @"size: 1152 × 648, bounds: 1920 × 1080, states: [Activated]"
     );
+
+    assert_eq!(errors.errors(), Vec::<String>::new());
+}
+
+#[test]
+fn is_in_scratchpad_rule_sets_shown_geometry() {
+    let (errors, _guard) = ErrorCollector::install();
+    let (mut f, id) = set_up_with_config(
+        r#"
+        window-rule {
+            match is-in-scratchpad=true
+            default-column-width { proportion 0.5; }
+            default-window-height { proportion 0.25; }
+            default-floating-position x=0 y=0 relative-to="top"
+        }
+        "#,
+    );
+    let surface = map_window(&mut f, id, "a", None);
+    let _ = f.client(id).window(&surface).recent_configures();
+
+    // The rule applies as soon as the window is hidden, so it's asked for its size right away.
+    f.niri_state()
+        .do_action(Action::MoveWindowToScratchpad, false);
+    f.double_roundtrip(id);
+    let window = f.client(id).window(&surface);
+    assert_snapshot!(
+        window.format_recent_configures(),
+        @"size: 960 × 270, bounds: 1888 × 1048, states: []"
+    );
+    window.set_size(960, 270);
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    // It's shown at the top center with that size.
+    f.niri_state()
+        .do_action(Action::ScratchpadShow(None), false);
+    f.double_roundtrip(id);
+    let window = f.client(id).window(&surface);
+    assert_snapshot!(
+        window.format_recent_configures(),
+        @"size: 960 × 270, bounds: 1920 × 1080, states: [Activated]"
+    );
+    let ws = f.niri().layout.active_workspace().unwrap();
+    let (_, pos) = ws.floating().tiles_with_offsets().next().unwrap();
+    assert_eq!((pos.x, pos.y), (480., 0.));
 
     assert_eq!(errors.errors(), Vec::<String>::new());
 }

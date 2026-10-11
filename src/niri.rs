@@ -1150,6 +1150,20 @@ impl State {
             self.store_unmap_snapshot(window, Some(&output));
         }
 
+        // Window rules matching is-in-scratchpad can set the size and position the window is
+        // shown with, so apply them now rather than on the next refresh. Then the window can
+        // resize while it's hidden, instead of right after it's shown.
+        {
+            let config = self.niri.config.borrow();
+            if let Some((mapped, _)) = self.niri.layout.find_window_and_output_mut(&surface) {
+                if mapped.recompute_window_rules(&config.window_rules, self.niri.is_at_startup) {
+                    drop(config);
+                    self.niri.layout.update_window(window, None);
+                }
+            }
+        }
+        self.niri.layout.prepare_hidden_scratchpad_window(window);
+
         self.niri
             .stop_casts_for_target(CastTarget::Window { id: id.get() });
 
