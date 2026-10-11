@@ -416,6 +416,8 @@ pub enum ScratchpadState {
 pub enum ScratchpadToggle<Id> {
     /// The focused window was hidden.
     Hidden(Id),
+    /// The focused window was hidden, and the next one was shown in its place.
+    Cycled { hidden: Id, shown: Id },
     /// An already shown window was focused.
     Focused(Id),
     /// A window was shown on the active workspace.
@@ -434,6 +436,8 @@ struct Scratchpad<W: LayoutElement> {
     next_seq: u64,
     /// Generation for the next hiding, used to match hiding windows to hidden tiles.
     next_gen: u64,
+    /// Windows shown in the current round of cycling through the scratchpad windows.
+    cycled: Vec<W::Id>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -443,6 +447,7 @@ pub struct Options {
     pub gestures: niri_config::Gestures,
     pub overview: niri_config::Overview,
     pub blur: niri_config::Blur,
+    pub scratchpad: niri_config::Scratchpad,
     // Debug flags.
     pub disable_resize_throttling: bool,
     pub disable_transactions: bool,
@@ -720,6 +725,7 @@ impl Options {
             gestures: config.gestures,
             overview: config.overview,
             blur: config.blur,
+            scratchpad: config.scratchpad,
             disable_resize_throttling: config.debug.disable_resize_throttling,
             disable_transactions: config.debug.disable_transactions,
             deactivate_unfocused_windows: config.debug.deactivate_unfocused_windows,
@@ -769,6 +775,7 @@ impl<W: LayoutElement> Scratchpad<W> {
             hidden: VecDeque::new(),
             next_seq: 0,
             next_gen: 0,
+            cycled: Vec::new(),
         }
     }
 }
@@ -3891,7 +3898,26 @@ impl<W: LayoutElement> Layout<W> {
     /// 3. If some other workspace has shown scratchpad windows, move the most recently shown one to
     ///    the active workspace and focus it.
     /// 4. If there are hidden scratchpad windows, show the first one from the queue.
+    ///
+    /// With cycle-windows, the first rule shows the next hidden window in place of the focused
+    /// one, until every window was shown once; only then it hides the focused window.
     pub fn toggle_scratchpad(&mut self, filter: impl Fn(&W) -> bool) -> ScratchpadToggle<W::Id> {
+        let res = self.toggle_scratchpad_inner(&filter);
+
+        // Remember which windows this round of cycling went through.
+        match &res {
+            ScratchpadToggle::Hidden(_) => self.scratchpad.cycled.clear(),
+            ScratchpadToggle::Cycled { shown, .. } => self.scratchpad.cycled.push(shown.clone()),
+            ScratchpadToggle::Focused(id) | ScratchpadToggle::Shown(id) => {
+                self.scratchpad.cycled = vec![id.clone()];
+            }
+            ScratchpadToggle::Nothing => (),
+        }
+
+        res
+    }
+
+    fn toggle_scratchpad_inner(&mut self, filter: &impl Fn(&W) -> bool) -> ScratchpadToggle<W::Id> {
         if !matches!(self.monitor_set, MonitorSet::Normal { .. }) {
             return ScratchpadToggle::Nothing;
         }
@@ -3900,10 +3926,21 @@ impl<W: LayoutElement> Layout<W> {
         if let Some(win) = self.focus() {
             let id = win.id().clone();
             if filter(win) && self.is_scratchpad_shown(&id) {
-                return match self.move_to_scratchpad(Some(&id)) {
-                    Some(id) => ScratchpadToggle::Hidden(id),
-                    None => ScratchpadToggle::Nothing,
+                let next = if self.options.scratchpad.cycle_windows {
+                    self.next_scratchpad_window_to_cycle(&id, filter)
+                } else {
+                    None
                 };
+
+                let Some(hidden) = self.move_to_scratchpad(Some(&id)) else {
+                    return ScratchpadToggle::Nothing;
+                };
+
+                let Some(shown) = next else {
+                    return ScratchpadToggle::Hidden(hidden);
+                };
+                self.scratchpad_show(&shown, true);
+                return ScratchpadToggle::Cycled { hidden, shown };
             }
         }
 
@@ -3974,6 +4011,30 @@ impl<W: LayoutElement> Layout<W> {
 
         debug!("no scratchpad window to toggle");
         ScratchpadToggle::Nothing
+    }
+
+    /// Returns the hidden window to show next when cycling away from the focused window.
+    ///
+    /// This is the first matching window in the queue that wasn't shown in this round yet.
+    fn next_scratchpad_window_to_cycle(
+        &mut self,
+        focused: &W::Id,
+        filter: &impl Fn(&W) -> bool,
+    ) -> Option<W::Id> {
+        // Forget windows that left the scratchpad.
+        let mut cycled = mem::take(&mut self.scratchpad.cycled);
+        cycled.retain(|id| self.is_scratchpad_hidden(id) || self.is_scratchpad_shown(id));
+        if !cycled.contains(focused) {
+            cycled.push(focused.clone());
+        }
+        self.scratchpad.cycled = cycled;
+
+        self.scratchpad
+            .hidden
+            .iter()
+            .map(|tile| tile.window())
+            .find(|win| filter(win) && !self.scratchpad.cycled.contains(win.id()))
+            .map(|win| win.id().clone())
     }
 
     /// Moves a shown scratchpad window from another workspace to the active workspace.

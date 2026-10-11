@@ -1454,7 +1454,9 @@ impl Op {
             }
             Op::ToggleScratchpad { id } => {
                 let res = layout.toggle_scratchpad(|win| id.is_none_or(|id| win.0.id == id));
-                if let ScratchpadToggle::Hidden(id) = res {
+                if let ScratchpadToggle::Hidden(id) | ScratchpadToggle::Cycled { hidden: id, .. } =
+                    res
+                {
                     layout.prepare_hidden_scratchpad_window(&id);
                 }
             }
@@ -4186,10 +4188,15 @@ proptest! {
     fn random_operations_dont_panic(
         ops: Vec<Op>,
         layout_config in arbitrary_layout_part(),
+        cycle_windows: bool,
     ) {
         // eprintln!("{ops:?}");
         let options = Options {
             layout: niri_config::Layout::from_part(&layout_config),
+            scratchpad: niri_config::Scratchpad {
+                cycle_windows,
+                ..Default::default()
+            },
             ..Default::default()
         };
 

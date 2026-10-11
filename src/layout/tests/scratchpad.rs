@@ -2156,3 +2156,151 @@ fn new_window_in_scratchpad_does_not_activate_output() {
     add(&mut layout, ActivateWindow::Yes);
     assert_eq!(active_output(&layout), "output2");
 }
+
+fn cycle_options() -> Options {
+    let mut options = Options::default();
+    options.scratchpad.cycle_windows = true;
+    options
+}
+
+/// Three hidden windows, queued in order 1, 2, 3, and a tiled window 4.
+fn three_hidden() -> Vec<Op> {
+    vec![
+        Op::AddOutput(1),
+        window(1, 100),
+        window(2, 100),
+        window(3, 100),
+        window(4, 100),
+        hide(1),
+        hide(2),
+        hide(3),
+    ]
+}
+
+#[test]
+fn cycle_through_windows() {
+    let mut layout = check_ops_with_options(cycle_options(), three_hidden());
+
+    let mut steps = Vec::new();
+    for _ in 0..5 {
+        let res = layout.toggle_scratchpad(|_| true);
+        layout.verify_invariants();
+        steps.push(format!("{res:?} -> {}", summary(&layout)));
+    }
+    assert_snapshot!(steps.join("\n"), @"
+    Shown(1) -> hidden: [2, 3], shown: [1], focus: Some(1)
+    Cycled { hidden: 1, shown: 2 } -> hidden: [3, 1], shown: [2], focus: Some(2)
+    Cycled { hidden: 2, shown: 3 } -> hidden: [1, 2], shown: [3], focus: Some(3)
+    Hidden(3) -> hidden: [1, 2, 3], shown: [], focus: Some(4)
+    Shown(1) -> hidden: [2, 3], shown: [1], focus: Some(1)
+    ");
+}
+
+#[test]
+fn cycle_without_option_toggles() {
+    let mut layout = check_ops(three_hidden());
+
+    let mut steps = Vec::new();
+    for _ in 0..3 {
+        let res = layout.toggle_scratchpad(|_| true);
+        layout.verify_invariants();
+        steps.push(format!("{res:?} -> {}", summary(&layout)));
+    }
+    assert_snapshot!(steps.join("\n"), @"
+    Shown(1) -> hidden: [2, 3], shown: [1], focus: Some(1)
+    Hidden(1) -> hidden: [2, 3, 1], shown: [], focus: Some(4)
+    Shown(2) -> hidden: [3, 1], shown: [2], focus: Some(2)
+    ");
+}
+
+#[test]
+fn cycle_single_window_toggles() {
+    let ops = [Op::AddOutput(1), window(1, 100), hide(1), toggle()];
+    let mut layout = check_ops_with_options(cycle_options(), ops);
+    assert_snapshot!(summary(&layout), @"hidden: [], shown: [1], focus: Some(1)");
+
+    assert_eq!(
+        layout.toggle_scratchpad(|_| true),
+        ScratchpadToggle::Hidden(1)
+    );
+    layout.verify_invariants();
+    assert_snapshot!(summary(&layout), @"hidden: [1], shown: [], focus: None");
+}
+
+#[test]
+fn cycle_with_filter() {
+    // Only the matching window takes part, so this toggles it.
+    let mut ops = three_hidden();
+    ops.push(Op::ToggleScratchpad { id: Some(2) });
+    let mut layout = check_ops_with_options(cycle_options(), ops);
+    assert_snapshot!(summary(&layout), @"hidden: [1, 3], shown: [2], focus: Some(2)");
+
+    check_ops_on_layout(&mut layout, [Op::ToggleScratchpad { id: Some(2) }]);
+    assert_snapshot!(summary(&layout), @"hidden: [1, 3, 2], shown: [], focus: Some(4)");
+}
+
+#[test]
+fn cycle_round_restarts_after_focusing_shown_window() {
+    let mut ops = three_hidden();
+    ops.extend([toggle(), toggle(), Op::FocusWindow(4)]);
+    let mut layout = check_ops_with_options(cycle_options(), ops);
+    assert_snapshot!(summary(&layout), @"hidden: [3, 1], shown: [2], focus: Some(4)");
+
+    // Focusing the shown window starts a new round from it.
+    let mut steps = Vec::new();
+    for _ in 0..4 {
+        let res = layout.toggle_scratchpad(|_| true);
+        layout.verify_invariants();
+        steps.push(format!("{res:?} -> {}", summary(&layout)));
+    }
+    assert_snapshot!(steps.join("\n"), @"
+    Focused(2) -> hidden: [3, 1], shown: [2], focus: Some(2)
+    Cycled { hidden: 2, shown: 3 } -> hidden: [1, 2], shown: [3], focus: Some(3)
+    Cycled { hidden: 3, shown: 1 } -> hidden: [2, 3], shown: [1], focus: Some(1)
+    Hidden(1) -> hidden: [2, 3, 1], shown: [], focus: Some(4)
+    ");
+}
+
+#[test]
+fn cycle_forgets_closed_windows() {
+    let mut ops = three_hidden();
+    // Show 1, then 2, then close 1, which is hidden.
+    ops.extend([toggle(), toggle(), Op::CloseWindow(1)]);
+    let mut layout = check_ops_with_options(cycle_options(), ops);
+    assert_snapshot!(summary(&layout), @"hidden: [3], shown: [2], focus: Some(2)");
+
+    let mut steps = Vec::new();
+    for _ in 0..2 {
+        let res = layout.toggle_scratchpad(|_| true);
+        layout.verify_invariants();
+        steps.push(format!("{res:?} -> {}", summary(&layout)));
+    }
+    assert_snapshot!(steps.join("\n"), @"
+    Cycled { hidden: 2, shown: 3 } -> hidden: [2], shown: [3], focus: Some(3)
+    Hidden(3) -> hidden: [2, 3], shown: [], focus: Some(4)
+    ");
+}
+
+#[test]
+fn cycle_does_nothing_when_hiding_is_refused() {
+    let mut ops = three_hidden();
+    ops.extend([
+        toggle(),
+        // A dialog of the shown window keeps it from hiding.
+        window(5, 100),
+        Op::SetParent {
+            id: 5,
+            new_parent_id: Some(1),
+        },
+        Op::FocusWindow(1),
+    ]);
+    let mut layout = check_ops_with_options(cycle_options(), ops);
+    assert_snapshot!(summary(&layout), @"hidden: [2, 3], shown: [1], focus: Some(1)");
+
+    assert_eq!(
+        layout.toggle_scratchpad(|_| true),
+        ScratchpadToggle::Nothing
+    );
+    layout.verify_invariants();
+    assert_snapshot!(summary(&layout), @"hidden: [2, 3], shown: [1], focus: Some(1)");
+}

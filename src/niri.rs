@@ -1123,6 +1123,10 @@ impl State {
 
         match self.niri.layout.toggle_scratchpad(filter) {
             ScratchpadToggle::Hidden(window) => self.on_window_hidden_to_scratchpad(&window),
+            ScratchpadToggle::Cycled { hidden, .. } => {
+                self.on_window_hidden_to_scratchpad(&hidden);
+                self.move_cursor_after_scratchpad_focus(active_output);
+            }
             ScratchpadToggle::Focused(_) | ScratchpadToggle::Shown(_) => {
                 self.move_cursor_after_scratchpad_focus(active_output);
             }
