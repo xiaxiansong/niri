@@ -734,6 +734,11 @@ fn print_window(window: &Window) {
     };
     println!("  Scratchpad: {scratchpad}");
 
+    println!(
+        "  Is sticky: {}",
+        if window.is_sticky { "yes" } else { "no" }
+    );
+
     if let Some(pid) = window.pid {
         println!("  PID: {pid}");
     } else {

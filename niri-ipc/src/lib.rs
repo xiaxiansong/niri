@@ -897,6 +897,22 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
+    /// Make a window sticky, or not sticky if it is.
+    ///
+    /// A sticky window is a floating window that follows you to whichever workspace you switch
+    /// to on its output. A tiled window becomes floating, and a window in the scratchpad is taken
+    /// out of it.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Make the focused window sticky, or not sticky if it is")
+    )]
+    ToggleWindowSticky {
+        /// Id of the window to toggle.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
     /// Move a floating window on screen.
     #[cfg_attr(feature = "clap", clap(about = "Move the floating window on screen"))]
     MoveFloatingWindow {
@@ -1427,6 +1443,9 @@ pub struct Window {
     /// no workspace, so check this field rather than `workspace_id`.
     #[serde(default)]
     pub is_scratchpad_hidden: bool,
+    /// Whether this window is sticky, following the active workspace of its output.
+    #[serde(default)]
+    pub is_sticky: bool,
     /// Position- and size-related properties of the window.
     pub layout: WindowLayout,
     /// Timestamp when the window was most recently focused.

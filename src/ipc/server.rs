@@ -544,6 +544,7 @@ fn make_ipc_window(
         is_urgent: mapped.is_urgent(),
         is_in_scratchpad: mapped.scratchpad_state() != ScratchpadState::None,
         is_scratchpad_hidden: mapped.scratchpad_state() == ScratchpadState::Hidden,
+        is_sticky: mapped.is_sticky(),
         layout,
         focus_timestamp: mapped.get_focus_timestamp().map(Timestamp::from),
     })
@@ -761,7 +762,8 @@ impl State {
             let mut changed = ipc_win.workspace_id != workspace_id
                 || ipc_win.is_floating != mapped.is_floating()
                 || ipc_win.is_in_scratchpad != (scratchpad_state != ScratchpadState::None)
-                || ipc_win.is_scratchpad_hidden != (scratchpad_state == ScratchpadState::Hidden);
+                || ipc_win.is_scratchpad_hidden != (scratchpad_state == ScratchpadState::Hidden)
+                || ipc_win.is_sticky != mapped.is_sticky();
 
             changed |= with_toplevel_role(mapped.toplevel(), |role| {
                 ipc_win.title != role.title || ipc_win.app_id != role.app_id

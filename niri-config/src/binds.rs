@@ -359,6 +359,9 @@ pub enum Action {
     ToggleWindowInScratchpad,
     #[knuffel(skip)]
     ToggleWindowInScratchpadById(u64),
+    ToggleWindowSticky,
+    #[knuffel(skip)]
+    ToggleWindowStickyById(u64),
     #[knuffel(skip)]
     MoveFloatingWindowById {
         id: Option<u64>,
@@ -725,6 +728,10 @@ impl From<niri_ipc::Action> for Action {
             }
             niri_ipc::Action::ToggleWindowInScratchpad { id: Some(id) } => {
                 Self::ToggleWindowInScratchpadById(id)
+            }
+            niri_ipc::Action::ToggleWindowSticky { id: None } => Self::ToggleWindowSticky,
+            niri_ipc::Action::ToggleWindowSticky { id: Some(id) } => {
+                Self::ToggleWindowStickyById(id)
             }
             niri_ipc::Action::MoveFloatingWindow { id, x, y } => {
                 Self::MoveFloatingWindowById { id, x, y }
