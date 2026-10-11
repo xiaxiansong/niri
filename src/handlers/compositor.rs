@@ -352,7 +352,7 @@ impl CompositorHandler for State {
                         transaction.register_deadline_timer(&self.niri.event_loop);
                     }
 
-                    if was_active {
+                    if was_active && !self.focus_previous_window_after_close() {
                         self.maybe_warp_cursor_to_focus();
                     }
 

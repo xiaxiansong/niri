@@ -1116,6 +1116,40 @@ impl State {
         self.niri.queue_redraw_all();
     }
 
+    /// Focuses the most recently focused window after the focused window closed, with
+    /// focus-previous-window-on-close.
+    ///
+    /// Like `focus-window-previous`, this can switch workspaces and monitors. Returns `false`
+    /// without doing anything if the option is off or there's no window to focus.
+    pub fn focus_previous_window_after_close(&mut self) -> bool {
+        if !self
+            .niri
+            .config
+            .borrow()
+            .input
+            .focus_previous_window_on_close
+        {
+            return false;
+        }
+
+        let Some(window) = self
+            .niri
+            .layout
+            .windows()
+            .map(|(_, win)| win)
+            .filter(|win| win.scratchpad_state() != crate::layout::ScratchpadState::Hidden)
+            // Windows that were never focused don't count.
+            .filter_map(|win| Some((win.get_focus_timestamp()?, win)))
+            .max_by_key(|(timestamp, _)| *timestamp)
+            .map(|(_, win)| win.window.clone())
+        else {
+            return false;
+        };
+
+        self.focus_window(&window);
+        true
+    }
+
     /// Moves the cursor after a scratchpad action focused a window, like `focus_window()`.
     pub fn move_cursor_after_scratchpad_focus(&mut self, prev_active_output: Option<Output>) {
         let new_active = self.niri.layout.active_output().cloned();
