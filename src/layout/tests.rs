@@ -43,7 +43,20 @@ struct TestWindowInner {
     is_pending_windowed_fullscreen: Cell<bool>,
     animate_next_configure: Cell<bool>,
     animation_snapshot: RefCell<Option<LayoutElementRenderSnapshot>>,
+    interactive_resize: Cell<Option<TestInteractiveResize>>,
+    committed_interactive_resize: Cell<Option<InteractiveResizeData>>,
     rules: ResolvedWindowRules,
+}
+
+/// Interactive resize state of a test window.
+///
+/// Test windows report the resize with their commits, and like real windows, the commit after the
+/// resize stops is still part of it.
+#[derive(Debug, Clone, Copy)]
+enum TestInteractiveResize {
+    Ongoing(InteractiveResizeData),
+    /// The resize has stopped, and the next commit is the last one of the resize.
+    WaitingForLastCommit(InteractiveResizeData),
 }
 
 #[derive(Debug, Clone)]
@@ -96,12 +109,26 @@ impl TestWindow {
             is_pending_windowed_fullscreen: Cell::new(false),
             animate_next_configure: Cell::new(false),
             animation_snapshot: RefCell::new(None),
+            interactive_resize: Cell::new(None),
+            committed_interactive_resize: Cell::new(None),
             rules: params.rules.unwrap_or_default(),
         }))
     }
 
     fn communicate(&self) -> bool {
         let mut changed = false;
+
+        let resize = match self.0.interactive_resize.get() {
+            Some(TestInteractiveResize::Ongoing(data)) => Some(data),
+            Some(TestInteractiveResize::WaitingForLastCommit(data)) => {
+                self.0.interactive_resize.set(None);
+                Some(data)
+            }
+            None => None,
+        };
+        if self.0.committed_interactive_resize.replace(resize) != resize {
+            changed = true;
+        }
 
         let size = self.0.forced_size.get().or(self.0.requested_size.get());
         if let Some(size) = size {
@@ -281,14 +308,24 @@ impl LayoutElement for TestWindow {
         self.0.animation_snapshot.take()
     }
 
-    fn set_interactive_resize(&mut self, _data: Option<InteractiveResizeData>) {}
+    fn set_interactive_resize(&mut self, data: Option<InteractiveResizeData>) {
+        let resize = &self.0.interactive_resize;
+        if let Some(data) = data {
+            resize.set(Some(TestInteractiveResize::Ongoing(data)));
+        } else if let Some(TestInteractiveResize::Ongoing(data)) = resize.get() {
+            resize.set(Some(TestInteractiveResize::WaitingForLastCommit(data)));
+        }
+    }
 
-    fn cancel_interactive_resize(&mut self) {}
+    fn cancel_interactive_resize(&mut self) {
+        self.0.interactive_resize.set(None);
+        self.0.committed_interactive_resize.set(None);
+    }
 
     fn on_commit(&mut self, _serial: Serial) {}
 
     fn interactive_resize_data(&self) -> Option<InteractiveResizeData> {
-        None
+        self.0.committed_interactive_resize.get()
     }
 
     fn is_urgent(&self) -> bool {
