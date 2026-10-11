@@ -79,6 +79,11 @@ pub struct ResolvedWindowRules {
     /// Only read when the window maps.
     pub open_in_scratchpad: Option<bool>,
 
+    /// Whether the window should open sticky.
+    ///
+    /// Only read when the window maps.
+    pub open_sticky: Option<bool>,
+
     /// What to do on xdg-activation requests.
     pub on_xdg_activate: Option<OnXdgActivate>,
 
@@ -190,6 +195,15 @@ impl<'a> WindowRef<'a> {
         }
     }
 
+    pub fn is_sticky(self) -> bool {
+        match self {
+            // Like is-floating, this makes a cycle with the open-sticky rule, so it cannot be used
+            // for initial configure rules.
+            WindowRef::Unmapped(_) => false,
+            WindowRef::Mapped(mapped) => mapped.is_sticky(),
+        }
+    }
+
     pub fn is_in_scratchpad(self) -> bool {
         match self {
             // Like is-floating, this makes a cycle with the open-in-scratchpad rule, so it cannot
@@ -280,6 +294,10 @@ impl ResolvedWindowRules {
 
                 if let Some(x) = rule.open_in_scratchpad {
                     resolved.open_in_scratchpad = Some(x);
+                }
+
+                if let Some(x) = rule.open_sticky {
+                    resolved.open_sticky = Some(x);
                 }
 
                 if let Some(x) = rule.on_xdg_activate {
@@ -394,6 +412,11 @@ impl ResolvedWindowRules {
     }
 
     pub fn compute_open_floating(&self, toplevel: &ToplevelSurface) -> bool {
+        // Sticky windows are floating.
+        if self.open_sticky == Some(true) {
+            return true;
+        }
+
         if let Some(res) = self.open_floating {
             return res;
         }
@@ -479,6 +502,12 @@ fn window_matches(window: WindowRef, role: &XdgToplevelSurfaceRoleAttributes, m:
 
     if let Some(is_in_scratchpad) = m.is_in_scratchpad {
         if window.is_in_scratchpad() != is_in_scratchpad {
+            return false;
+        }
+    }
+
+    if let Some(is_sticky) = m.is_sticky {
+        if window.is_sticky() != is_sticky {
             return false;
         }
     }

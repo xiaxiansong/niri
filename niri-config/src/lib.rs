@@ -1772,6 +1772,7 @@ mod tests {
                             is_window_cast_target: None,
                             is_urgent: None,
                             is_in_scratchpad: None,
+                            is_sticky: None,
                             at_startup: None,
                         },
                     ],
@@ -1792,6 +1793,7 @@ mod tests {
                             is_window_cast_target: None,
                             is_urgent: None,
                             is_in_scratchpad: None,
+                            is_sticky: None,
                             at_startup: None,
                         },
                         Match {
@@ -1808,6 +1810,7 @@ mod tests {
                             is_window_cast_target: None,
                             is_urgent: None,
                             is_in_scratchpad: None,
+                            is_sticky: None,
                             at_startup: None,
                         },
                     ],
@@ -1839,6 +1842,7 @@ mod tests {
                         true,
                     ),
                     open_in_scratchpad: None,
+                    open_sticky: None,
                     on_xdg_activate: Some(
                         Ignore,
                     ),

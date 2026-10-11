@@ -211,6 +211,9 @@ impl CompositorHandler for State {
                         }
                     };
 
+                    // The scratchpad takes precedence, since a window can't be in both.
+                    let sticky = scratchpad.is_none() && rules.open_sticky == Some(true);
+
                     // The mapped pre-commit hook deals with dma-bufs on its own.
                     self.remove_default_dmabuf_pre_commit_hook(surface);
                     let hook = add_mapped_toplevel_pre_commit_hook(toplevel);
@@ -272,6 +275,10 @@ impl CompositorHandler for State {
                         // A window that comes back shown goes to the active output, which can be
                         // different from the one it was added on.
                         self.niri.queue_redraw_all();
+                    }
+
+                    if sticky {
+                        self.niri.layout.set_window_sticky(&window, true);
                     }
 
                     if let Some(output) = output {
