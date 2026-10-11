@@ -389,6 +389,8 @@ This action does nothing if the window has open dialogs or other child windows.
   4. If there are hidden windows, show the one that has been hidden the longest and focus it.
 - `remove-window-from-scratchpad` takes the focused window out of the scratchpad.
 It stays where it is as a regular floating window.
+- `toggle-window-in-scratchpad` combines the two: it hides the focused window if it's not in the scratchpad, and takes it out of the scratchpad if it is.
+This way one bind moves windows in and out of the scratchpad, while `scratchpad-show` shows and hides them.
 
 With the `app-id` property, `scratchpad-show` only considers scratchpad windows whose app ID matches the regular expression, in the same way as in window rules.
 
@@ -442,6 +444,8 @@ binds {
     Mod+Shift+Z repeat=false { move-window-to-scratchpad; }
     Mod+Z       repeat=false { scratchpad-show; }
     Mod+Ctrl+Z  repeat=false { remove-window-from-scratchpad; }
+    // Or, to move windows in and out of the scratchpad with one bind:
+    // Mod+Shift+Z repeat=false { toggle-window-in-scratchpad; }
     Mod+Grave   repeat=false { scratchpad-show app-id="^dropdown$"; }
     Mod+Shift+M repeat=false { scratchpad-show app-id="^(Spotify|spotify)$"; }
 }

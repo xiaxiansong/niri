@@ -73,6 +73,7 @@ The [scratchpad actions](./Configuration:-Key-Bindings.md#move-window-to-scratch
 
 ```sh
 niri msg action move-window-to-scratchpad --id 42
+niri msg action toggle-window-in-scratchpad --id 42
 niri msg action scratchpad-show --app-id '^dropdown$'
 ```
 
