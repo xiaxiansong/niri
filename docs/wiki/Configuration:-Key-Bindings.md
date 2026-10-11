@@ -401,6 +401,8 @@ Some consequences of these rules:
 So, there can be several scratchpad windows shown at the same time.
 - An `app-id` bind only picks among the matching windows and doesn't change the order of the other windows in the queue.
 
+The [`scratchpad` section](./Configuration:-Miscellaneous.md#scratchpad) can make `scratchpad-show` go through all scratchpad windows one press at a time (`cycle-windows`), and make shown windows hide when they lose the focus (`hide-on-focus-loss`).
+
 A window leaves the scratchpad when it is moved to the tiling layout (including through fullscreen or maximize), moved to another workspace or monitor, or closed.
 When you drag a shown window with the mouse, it stays in the scratchpad if you drop it onto the floating layout of a monitor's active workspace.
 If an application unmaps its window (for example, minimizes it to the tray) and maps it again later, a window that was in the scratchpad comes back shown on the active workspace of the focused monitor.

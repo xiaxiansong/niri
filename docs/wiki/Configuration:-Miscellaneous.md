@@ -55,6 +55,11 @@ config-notification {
     disable-failed
 }
 
+scratchpad {
+    cycle-windows
+    hide-on-focus-loss
+}
+
 blur {
     // off
     passes 3
@@ -326,6 +331,48 @@ For example, if you have a custom one.
 ```kdl
 config-notification {
     disable-failed
+}
+```
+
+### `scratchpad`
+
+<sup>Since: next release</sup>
+
+Settings for the [scratchpad](./Configuration:-Key-Bindings.md#move-window-to-scratchpad-scratchpad-show-remove-window-from-scratchpad).
+
+#### `cycle-windows`
+
+By default, `scratchpad-show` on a focused shown scratchpad window hides it, so with several windows in the scratchpad, every other press shows a window.
+
+With `cycle-windows`, `scratchpad-show` on a focused shown window hides it and shows the next hidden window in its place, until every window was shown once.
+Then it hides the focused window.
+So with three hidden windows, pressing the bind goes: first window, second window, third window, nothing, first window again.
+
+A new round starts whenever `scratchpad-show` shows or focuses a window while no shown scratchpad window is focused.
+With the `app-id` property, only matching windows take part.
+Like hiding, switching to the next window does nothing if the focused window has open dialogs.
+
+```kdl
+scratchpad {
+    cycle-windows
+}
+```
+
+#### `hide-on-focus-loss`
+
+With `hide-on-focus-loss`, a shown scratchpad window hides by itself when the focus moves to another window, for example when you click another window, focus one with a bind, or a new window opens.
+This is how drop-down terminals usually behave: show the window, use it, then click back into what you were doing.
+
+The window stays shown while one of its dialogs has the focus, since windows with dialogs can't hide.
+Focusing a layer-shell surface such as a launcher or a bar doesn't count, since the window keeps the focus in the layout.
+While the overview or the recent windows switcher is open, the focus moves around as you browse, so the window hides only if it lost the focus once they close.
+
+With [`focus-follows-mouse`](./Configuration:-Input.md#focus-follows-mouse), moving the mouse off the window would hide it.
+So, this option also makes focus-follows-mouse leave the focus on a shown scratchpad window: click another window to move on.
+
+```kdl
+scratchpad {
+    hide-on-focus-loss
 }
 ```
 
