@@ -106,6 +106,7 @@ input {
     // warp-mouse-to-focus
     // focus-follows-mouse max-scroll-amount="0%"
     // workspace-auto-back-and-forth
+    // focus-previous-window-on-close
 
     // mod-key "Super"
     // mod-key-nested "Alt"
@@ -379,6 +380,24 @@ Niri will correctly switch to the workspace you came from, even if workspaces we
 ```kdl
 input {
     workspace-auto-back-and-forth
+}
+```
+
+#### `focus-previous-window-on-close`
+
+<sup>Since: next release</sup>
+
+Normally, when you close the focused window, the focus goes to a window next to it, and if it was the last window on the workspace, nothing is focused.
+If this flag is enabled, the focus goes back to the window that was focused before instead, like with [`focus-window-previous`](./Configuration:-Key-Bindings.md).
+That window can be on another workspace or monitor, which niri then switches to.
+
+This also applies when an application unmaps its window, for example when it minimizes to the tray.
+Windows hidden in the scratchpad and windows that were never focused are skipped.
+The order is the same as in the [recent windows switcher](./Configuration:-Recent-Windows.md), so a window that you only passed through briefly (for less than `debounce-ms`) doesn't move up in the order.
+
+```kdl
+input {
+    focus-previous-window-on-close
 }
 ```
 
