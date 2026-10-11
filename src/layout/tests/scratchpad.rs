@@ -2,28 +2,28 @@ use insta::assert_snapshot;
 
 use super::*;
 
-fn window(id: usize, width: i32) -> Op {
+pub(super) fn window(id: usize, width: i32) -> Op {
     let mut params = TestWindowParams::new(id);
     params.bbox = Rectangle::from_size(Size::from((width, 200)));
     Op::AddWindow { params }
 }
 
-fn floating_window(id: usize) -> Op {
+pub(super) fn floating_window(id: usize) -> Op {
     let mut params = TestWindowParams::new(id);
     params.is_floating = true;
     Op::AddWindow { params }
 }
 
-fn hide(id: usize) -> Op {
+pub(super) fn hide(id: usize) -> Op {
     Op::MoveWindowToScratchpad { id: Some(id) }
 }
 
-fn toggle() -> Op {
+pub(super) fn toggle() -> Op {
     Op::ToggleScratchpad { id: None }
 }
 
 /// Hidden queue, shown windows and the focused window.
-fn summary(layout: &Layout<TestWindow>) -> String {
+pub(super) fn summary(layout: &Layout<TestWindow>) -> String {
     let hidden: Vec<_> = layout
         .scratchpad_hidden_windows()
         .map(|win| win.0.id)
@@ -39,7 +39,7 @@ fn summary(layout: &Layout<TestWindow>) -> String {
     format!("hidden: {hidden:?}, shown: {shown:?}, focus: {focus:?}")
 }
 
-fn state(layout: &Layout<TestWindow>, id: usize) -> ScratchpadState {
+pub(super) fn state(layout: &Layout<TestWindow>, id: usize) -> ScratchpadState {
     layout
         .windows()
         .map(|(_, win)| win)
@@ -821,7 +821,7 @@ fn operations_on_hidden_window_are_ignored() {
 }
 
 /// Window ids on each workspace of each output, with `*` marking the active workspace.
-fn workspaces(layout: &Layout<TestWindow>) -> String {
+pub(super) fn workspaces(layout: &Layout<TestWindow>) -> String {
     let MonitorSet::Normal { monitors, .. } = &layout.monitor_set else {
         return String::from("no outputs");
     };
@@ -1146,7 +1146,7 @@ fn activated_window_keeps_focus_when_shown_window_follows() {
     }
 }
 
-fn linear_switch_options() -> Options {
+pub(super) fn linear_switch_options() -> Options {
     use niri_config::animations::{Curve, EasingParams, Kind};
 
     const LINEAR: Kind = Kind::Easing(EasingParams {
@@ -1180,7 +1180,7 @@ fn shown_window_at_100_50() -> Vec<Op> {
     ]
 }
 
-fn output1(layout: &Layout<TestWindow>) -> Output {
+pub(super) fn output1(layout: &Layout<TestWindow>) -> Output {
     layout
         .outputs()
         .find(|o| o.name() == "output1")
@@ -1188,7 +1188,7 @@ fn output1(layout: &Layout<TestWindow>) -> Output {
         .clone()
 }
 
-fn hit(layout: &Layout<TestWindow>, x: f64, y: f64) -> String {
+pub(super) fn hit(layout: &Layout<TestWindow>, x: f64, y: f64) -> String {
     let output = output1(layout);
     match layout.window_under(&output, Point::from((x, y))) {
         None => String::from("none"),

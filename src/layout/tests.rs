@@ -17,6 +17,7 @@ mod animations;
 mod fill_view;
 mod fullscreen;
 mod scratchpad;
+mod sticky;
 
 impl<W: LayoutElement> Default for Layout<W> {
     fn default() -> Self {
@@ -38,6 +39,7 @@ struct TestWindowInner {
     pending_sizing_mode: Cell<SizingMode>,
     pending_activated: Cell<bool>,
     scratchpad_state: Cell<ScratchpadState>,
+    sticky: Cell<bool>,
     sizing_mode: Cell<SizingMode>,
     is_windowed_fullscreen: Cell<bool>,
     is_pending_windowed_fullscreen: Cell<bool>,
@@ -104,6 +106,7 @@ impl TestWindow {
             pending_sizing_mode: Cell::new(SizingMode::Normal),
             pending_activated: Cell::new(false),
             scratchpad_state: Cell::new(ScratchpadState::None),
+            sticky: Cell::new(false),
             sizing_mode: Cell::new(SizingMode::Normal),
             is_windowed_fullscreen: Cell::new(false),
             is_pending_windowed_fullscreen: Cell::new(false),
@@ -268,6 +271,14 @@ impl LayoutElement for TestWindow {
 
     fn scratchpad_state(&self) -> ScratchpadState {
         self.0.scratchpad_state.get()
+    }
+
+    fn set_sticky(&mut self, sticky: bool) {
+        self.0.sticky.set(sticky);
+    }
+
+    fn is_sticky(&self) -> bool {
+        self.0.sticky.get()
     }
 
     fn sizing_mode(&self) -> SizingMode {
@@ -703,6 +714,10 @@ enum Op {
         id: Option<usize>,
     },
     ToggleWindowInScratchpad {
+        #[proptest(strategy = "proptest::option::of(1..=5usize)")]
+        id: Option<usize>,
+    },
+    ToggleWindowSticky {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
     },
@@ -1504,6 +1519,9 @@ impl Op {
             }
             Op::RemoveWindowFromScratchpad { id } => {
                 layout.remove_from_scratchpad(id.as_ref());
+            }
+            Op::ToggleWindowSticky { id } => {
+                layout.toggle_window_sticky(id.as_ref());
             }
             Op::SetParent {
                 id,

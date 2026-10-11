@@ -584,11 +584,11 @@ impl<W: LayoutElement> FloatingSpace<W> {
         };
 
         let tile_size = tile.tile_size();
-        let in_scratchpad = tile.in_scratchpad;
+        let pinned = tile.is_pinned();
 
         let closing = self.new_closing_window(renderer, snapshot, tile_size, tile_pos, blocker);
         if let Some(closing) = closing {
-            if in_scratchpad {
+            if pinned {
                 self.scratchpad_closing_windows.push(closing);
             } else {
                 self.closing_windows.push(closing);
@@ -1516,9 +1516,10 @@ fn resolve_preset_size(preset: PresetSize, view_size: f64) -> ResolvedSize {
 
 /// Returns the render layer of a floating tile.
 ///
-/// With `pin_scratchpad`, shown scratchpad tiles go into their own layer pinned to the screen.
+/// With `pin_scratchpad`, shown scratchpad and sticky tiles go into their own layer pinned to the
+/// screen.
 fn tile_render_layer<W: LayoutElement>(tile: &Tile<W>, pin_scratchpad: bool) -> RenderLayer {
-    if pin_scratchpad && tile.in_scratchpad {
+    if pin_scratchpad && tile.is_pinned() {
         RenderLayer::PinnedScratchpad
     } else if tile.is_moving_between_workspaces() {
         RenderLayer::MovingBetweenWorkspaces

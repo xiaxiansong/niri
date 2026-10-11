@@ -245,6 +245,8 @@ pub trait LayoutElement {
     fn set_floating(&mut self, floating: bool);
     fn set_scratchpad_state(&mut self, state: ScratchpadState);
     fn scratchpad_state(&self) -> ScratchpadState;
+    fn set_sticky(&mut self, sticky: bool);
+    fn is_sticky(&self) -> bool;
     fn set_bounds(&self, bounds: Size<i32, Logical>);
     fn is_ignoring_opacity_window_rule(&self) -> bool;
 
@@ -2685,6 +2687,11 @@ impl<W: LayoutElement> Layout<W> {
                         state == ScratchpadState::Shown,
                         "interactively moved tile scratchpad flag must match the window state"
                     );
+                    assert_eq!(
+                        move_.tile.sticky,
+                        move_.tile.window().is_sticky(),
+                        "interactively moved tile sticky flag must match the window state"
+                    );
 
                     move_.tile.verify_invariants();
 
@@ -2747,6 +2754,7 @@ impl<W: LayoutElement> Layout<W> {
             tile.verify_invariants();
 
             assert!(tile.in_scratchpad, "hidden tile must be in the scratchpad");
+            assert!(!tile.sticky, "hidden tile cannot be sticky");
             assert_eq!(
                 tile.window().scratchpad_state(),
                 ScratchpadState::Hidden,
@@ -2766,6 +2774,7 @@ impl<W: LayoutElement> Layout<W> {
                     !tile.in_scratchpad,
                     "scrolling tiles cannot be in the scratchpad"
                 );
+                assert!(!tile.sticky, "scrolling tiles cannot be sticky");
                 assert_eq!(
                     tile.window().scratchpad_state(),
                     ScratchpadState::None,
@@ -2784,6 +2793,15 @@ impl<W: LayoutElement> Layout<W> {
                     tile.in_scratchpad,
                     state == ScratchpadState::Shown,
                     "floating tile scratchpad flag must match the window state"
+                );
+                assert_eq!(
+                    tile.sticky,
+                    tile.window().is_sticky(),
+                    "floating tile sticky flag must match the window state"
+                );
+                assert!(
+                    !(tile.sticky && tile.in_scratchpad),
+                    "sticky tiles cannot be in the scratchpad"
                 );
             }
 
@@ -2894,8 +2912,9 @@ impl<W: LayoutElement> Layout<W> {
             for (ws_idx, workspace) in monitor.workspaces.iter().enumerate() {
                 if ws_idx != monitor.active_workspace_idx {
                     assert!(
-                        !workspace.floating().tiles().any(|tile| tile.in_scratchpad),
-                        "shown scratchpad windows must be on the active workspace of their monitor"
+                        !workspace.floating().tiles().any(|tile| tile.is_pinned()),
+                        "shown scratchpad and sticky windows must be \
+                         on the active workspace of their monitor"
                     );
                 }
             }
@@ -3739,7 +3758,7 @@ impl<W: LayoutElement> Layout<W> {
             );
             // A shown scratchpad window stays on the screen while animating out, like it would
             // if it was still shown.
-            let pinned = is_floating && tile.in_scratchpad;
+            let pinned = is_floating && tile.is_pinned();
             let hiding = HidingWindow::new(id.clone(), gen, anim, pos, tile_size, pinned);
             ws.add_scratchpad_hiding(hiding);
         }
@@ -4126,6 +4145,82 @@ impl<W: LayoutElement> Layout<W> {
         for ws in self.workspaces_mut() {
             if ws.clear_scratchpad(&id) {
                 return;
+            }
+        }
+    }
+
+    /// Returns whether the window is sticky, possibly being moved.
+    pub fn is_sticky(&self, window: &W::Id) -> bool {
+        self.windows()
+            .any(|(_, win)| win.id() == window && win.is_sticky())
+    }
+
+    /// Makes a window sticky, or not sticky if it is.
+    pub fn toggle_window_sticky(&mut self, window: Option<&W::Id>) {
+        let id = match window {
+            Some(id) => id.clone(),
+            None => match self.focus() {
+                Some(win) => win.id().clone(),
+                None => return,
+            },
+        };
+
+        let sticky = !self.is_sticky(&id);
+        self.set_window_sticky(&id, sticky);
+    }
+
+    /// Makes a window sticky or not.
+    ///
+    /// A sticky window is a floating window that follows the active workspace of its output, like
+    /// a shown scratchpad window. A tiled window becomes floating, and a shown scratchpad window
+    /// is taken out of the scratchpad. Hidden scratchpad windows can't be sticky.
+    pub fn set_window_sticky(&mut self, window: &W::Id, sticky: bool) {
+        if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
+            if move_.tile.window().id() == window {
+                // The window is added to the workspace when dropped, and remains sticky only if
+                // it's floating, like a shown scratchpad window.
+                if move_.is_floating && move_.tile.sticky != sticky {
+                    if move_.tile.in_scratchpad {
+                        set_tile_scratchpad(&mut move_.tile, ScratchpadState::None);
+                    }
+                    set_tile_sticky(&mut move_.tile, sticky);
+                }
+                return;
+            }
+        }
+
+        if !self.has_window(window)
+            || self.is_scratchpad_hidden(window)
+            || self.is_sticky(window) == sticky
+        {
+            return;
+        }
+
+        if sticky {
+            self.set_window_floating(Some(window), true);
+        }
+
+        for ws in self.workspaces_mut() {
+            if ws.set_sticky(window, sticky) {
+                break;
+            }
+        }
+
+        // A window made sticky on an inactive workspace moves to the active one, without taking
+        // the focus.
+        if sticky {
+            let focus = self.focus().map(|win| win.id().clone());
+
+            if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
+                for mon in monitors {
+                    mon.scratchpad_follow();
+                }
+            }
+
+            if let Some(focus) = focus {
+                if let Some(ws) = self.active_workspace_mut() {
+                    ws.activate_window(&focus);
+                }
             }
         }
     }
@@ -4792,7 +4887,7 @@ impl<W: LayoutElement> Layout<W> {
 
         let ws_geo = match mon.scratchpad_pin_geo() {
             // Pinned scratchpad windows are visible even if their workspace isn't.
-            Some(pin_geo) if is_floating && tile.in_scratchpad => pin_geo,
+            Some(pin_geo) if is_floating && tile.is_pinned() => pin_geo,
             _ => {
                 let output_geo = Rectangle::from_size(mon.view_size());
                 if ws_geo.intersection(output_geo).is_none() {
@@ -4929,7 +5024,7 @@ impl<W: LayoutElement> Layout<W> {
                         // with their workspace, like in interactive_move_begin().
                         let output_geo = Rectangle::from_size(mon.view_size());
                         let ws_geo = match mon.scratchpad_pin_geo() {
-                            Some(pin_geo) if ws.is_floating(window) && tile.in_scratchpad => {
+                            Some(pin_geo) if ws.is_floating(window) && tile.is_pinned() => {
                                 Some(pin_geo)
                             }
                             _ => ws_geo.intersection(output_geo).map(|_| ws_geo),
@@ -5156,8 +5251,10 @@ impl<W: LayoutElement> Layout<W> {
         // Dragging in the overview shouldn't switch the workspace and so on.
         let allow_to_activate_workspace = !self.overview_open;
 
-        // Adding the tile will take it out of the scratchpad, remember to restore it after.
+        // Adding the tile will take it out of the scratchpad and unstick it, remember to restore
+        // it after.
         let was_scratchpad = move_.tile.in_scratchpad;
+        let was_sticky = move_.tile.sticky;
 
         match &mut self.monitor_set {
             MonitorSet::Normal {
@@ -5367,6 +5464,18 @@ impl<W: LayoutElement> Layout<W> {
                 for mon in monitors {
                     let ws = &mut mon.workspaces[mon.active_workspace_idx];
                     if ws.restore_scratchpad_shown(window) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Same for a sticky window.
+        if was_sticky {
+            if let MonitorSet::Normal { monitors, .. } = &mut self.monitor_set {
+                for mon in monitors {
+                    let ws = &mut mon.workspaces[mon.active_workspace_idx];
+                    if ws.set_sticky(window, true) {
                         break;
                     }
                 }
@@ -6079,6 +6188,19 @@ impl<W: LayoutElement> Default for MonitorSet<W> {
 fn set_tile_scratchpad<W: LayoutElement>(tile: &mut Tile<W>, state: ScratchpadState) {
     tile.in_scratchpad = state != ScratchpadState::None;
     tile.window_mut().set_scratchpad_state(state);
+
+    // Windows in the scratchpad aren't sticky.
+    if tile.in_scratchpad {
+        set_tile_sticky(tile, false);
+    }
+}
+
+/// Sets whether the tile and its window are sticky.
+///
+/// This is the only place that should change either, to keep them in sync.
+fn set_tile_sticky<W: LayoutElement>(tile: &mut Tile<W>, sticky: bool) {
+    tile.sticky = sticky;
+    tile.window_mut().set_sticky(sticky);
 }
 
 /// Decides the floating size and position that a hidden scratchpad tile is shown with on `ws`, if

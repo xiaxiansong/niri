@@ -221,6 +221,12 @@ impl LayoutElement for TestWindow {
         ScratchpadState::None
     }
 
+    fn set_sticky(&mut self, _sticky: bool) {}
+
+    fn is_sticky(&self) -> bool {
+        false
+    }
+
     fn set_bounds(&self, _bounds: Size<i32, Logical>) {}
 
     fn is_ignoring_opacity_window_rule(&self) -> bool {

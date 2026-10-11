@@ -100,6 +100,9 @@ pub struct Mapped {
     /// Scratchpad state of this window.
     scratchpad_state: ScratchpadState,
 
+    /// Whether this window is sticky, following the active workspace.
+    sticky: bool,
+
     /// Whether this window is a target of a window cast.
     is_window_cast_target: bool,
 
@@ -293,6 +296,7 @@ impl Mapped {
             is_active_in_column: true,
             is_floating: false,
             scratchpad_state: ScratchpadState::None,
+            sticky: false,
             is_window_cast_target: false,
             ignore_opacity_window_rule: false,
             block_out_buffer: RefCell::new(SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.])),
@@ -1013,6 +1017,16 @@ impl LayoutElement for Mapped {
 
     fn scratchpad_state(&self) -> ScratchpadState {
         self.scratchpad_state
+    }
+
+    fn set_sticky(&mut self, sticky: bool) {
+        let changed = self.sticky != sticky;
+        self.sticky = sticky;
+        self.need_to_recompute_rules |= changed;
+    }
+
+    fn is_sticky(&self) -> bool {
+        self.sticky
     }
 
     fn set_bounds(&self, bounds: Size<i32, Logical>) {

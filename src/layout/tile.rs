@@ -84,6 +84,10 @@ pub struct Tile<W: LayoutElement> {
     /// Whether the tile is in the scratchpad (hidden or shown).
     pub(super) in_scratchpad: bool,
 
+    /// Whether the floating tile is sticky, following the active workspace like a shown
+    /// scratchpad tile.
+    pub(super) sticky: bool,
+
     /// Sequence number of the last time this tile was shown from the scratchpad.
     pub(super) scratchpad_shown_seq: u64,
 
@@ -214,6 +218,7 @@ impl<W: LayoutElement> Tile<W> {
             floating_preset_width_idx: None,
             floating_preset_height_idx: None,
             in_scratchpad: false,
+            sticky: false,
             scratchpad_shown_seq: 0,
             scratchpad_hide_gen: None,
             open_animation: None,
@@ -604,6 +609,12 @@ impl<W: LayoutElement> Tile<W> {
         self.open_animation
             .as_ref()
             .map(OpenAnimation::clamped_value)
+    }
+
+    /// Returns whether the tile follows the active workspace and is pinned to the screen during
+    /// workspace switches, which is when it's shown from the scratchpad or sticky.
+    pub fn is_pinned(&self) -> bool {
+        self.in_scratchpad || self.sticky
     }
 
     pub fn resize_animation(&self) -> Option<&Animation> {

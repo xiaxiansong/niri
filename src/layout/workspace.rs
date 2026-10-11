@@ -28,8 +28,8 @@ use super::scrolling::{
 use super::shadow::Shadow;
 use super::tile::{Tile, TileRenderSnapshot};
 use super::{
-    set_tile_scratchpad, ActivateWindow, HitType, InsertPosition, InteractiveResizeData,
-    LayoutElement, Options, RemovedTile, ScratchpadState, SizeFrac,
+    set_tile_scratchpad, set_tile_sticky, ActivateWindow, HitType, InsertPosition,
+    InteractiveResizeData, LayoutElement, Options, RemovedTile, ScratchpadState, SizeFrac,
 };
 use crate::animation::Clock;
 use crate::layout::RenderLayer;
@@ -683,10 +683,14 @@ impl<W: LayoutElement> Workspace<W> {
         is_floating: bool,
         anim: Option<niri_config::Animation>,
     ) {
-        // Adding a tile to a workspace takes it out of the scratchpad. Showing scratchpad tiles
-        // goes through add_scratchpad_tile() instead.
+        // Adding a tile to a workspace takes it out of the scratchpad and unsticks it. Showing
+        // scratchpad tiles and following the active workspace goes through add_scratchpad_tile()
+        // instead.
         if tile.in_scratchpad {
             set_tile_scratchpad(&mut tile, ScratchpadState::None);
+        }
+        if tile.sticky {
+            set_tile_sticky(&mut tile, false);
         }
 
         self.enter_output_for_window(tile.window());
@@ -790,6 +794,9 @@ impl<W: LayoutElement> Workspace<W> {
         if tile.in_scratchpad {
             set_tile_scratchpad(&mut tile, ScratchpadState::None);
         }
+        if tile.sticky {
+            set_tile_sticky(&mut tile, false);
+        }
 
         self.enter_output_for_window(tile.window());
         self.scrolling
@@ -879,6 +886,25 @@ impl<W: LayoutElement> Workspace<W> {
         true
     }
 
+    /// Makes a floating window sticky or not, taking it out of the scratchpad.
+    ///
+    /// Returns `false` if the window isn't in the floating layout of this workspace.
+    pub fn set_sticky(&mut self, id: &W::Id, sticky: bool) -> bool {
+        let Some(tile) = self
+            .floating
+            .tiles_mut()
+            .find(|tile| tile.window().id() == id)
+        else {
+            return false;
+        };
+
+        if tile.in_scratchpad {
+            set_tile_scratchpad(tile, ScratchpadState::None);
+        }
+        set_tile_sticky(tile, sticky);
+        true
+    }
+
     /// Takes the hiding and closing animations of shown scratchpad windows.
     ///
     /// These stay on the screen like the shown scratchpad windows, so they follow the active
@@ -901,7 +927,7 @@ impl<W: LayoutElement> Workspace<W> {
             .add_scratchpad_closing_windows(animations.closing);
     }
 
-    /// Takes all shown scratchpad tiles out of the floating layout, from top to bottom.
+    /// Takes all shown scratchpad and sticky tiles out of the floating layout, from top to bottom.
     ///
     /// Unlike [`Workspace::remove_tile()`], this doesn't make the windows leave the output, since
     /// they are expected to move to another workspace on the same output.
@@ -909,7 +935,7 @@ impl<W: LayoutElement> Workspace<W> {
         let taken: Vec<_> = self
             .floating
             .tiles_with_offsets()
-            .filter(|(tile, _)| tile.in_scratchpad)
+            .filter(|(tile, _)| tile.is_pinned())
             .map(|(tile, pos)| (tile.window().id().clone(), pos))
             .collect();
         if taken.is_empty() {
@@ -1618,9 +1644,12 @@ impl<W: LayoutElement> Workspace<W> {
         if self.floating.has_window(&id) {
             let mut removed = self.floating.remove_tile(&id);
 
-            // Tiled windows are never in the scratchpad.
+            // Tiled windows are never in the scratchpad or sticky.
             if removed.tile.in_scratchpad {
                 set_tile_scratchpad(&mut removed.tile, ScratchpadState::None);
+            }
+            if removed.tile.sticky {
+                set_tile_sticky(&mut removed.tile, false);
             }
 
             // FIXME: compute closest pos?
@@ -2046,7 +2075,7 @@ impl<W: LayoutElement> Workspace<W> {
             if let Some(rv) = self
                 .floating
                 .tiles_with_render_positions()
-                .filter(|(tile, _)| !(skip_scratchpad && tile.in_scratchpad))
+                .filter(|(tile, _)| !(skip_scratchpad && tile.is_pinned()))
                 .find_map(|(tile, tile_pos)| HitType::hit_tile(tile, tile_pos, pos))
             {
                 return Some(rv);
@@ -2065,7 +2094,7 @@ impl<W: LayoutElement> Workspace<W> {
             .find_map(|(tile, tile_pos, visible)| {
                 // This logic should be consistent with window_under() in when it returns Some vs.
                 // None.
-                if !visible || (skip_scratchpad && tile.in_scratchpad) {
+                if !visible || (skip_scratchpad && tile.is_pinned()) {
                     return None;
                 }
 
@@ -2073,7 +2102,7 @@ impl<W: LayoutElement> Workspace<W> {
             })
     }
 
-    /// Shown scratchpad tiles from top to bottom with their render positions.
+    /// Shown scratchpad and sticky tiles from top to bottom with their render positions.
     ///
     /// Empty if the floating layout isn't visible.
     pub fn scratchpad_tiles_with_render_positions(
@@ -2082,7 +2111,7 @@ impl<W: LayoutElement> Workspace<W> {
         let visible = self.is_floating_visible();
         self.floating
             .tiles_with_render_positions()
-            .filter(move |(tile, _)| visible && tile.in_scratchpad)
+            .filter(move |(tile, _)| visible && tile.is_pinned())
     }
 
     pub fn descendants_added(&mut self, id: &W::Id) -> bool {

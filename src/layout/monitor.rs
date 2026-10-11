@@ -1706,7 +1706,7 @@ impl<W: LayoutElement> Monitor<W> {
         let config = self.options.animations.workspace_switch.0;
         let ws = &mut self.workspaces[self.active_workspace_idx];
         for (tile, _) in ws.tiles_with_render_positions_mut(false) {
-            if tile.in_scratchpad {
+            if tile.is_pinned() {
                 tile.animate_move_from_with_config(from, config);
                 tile.set_anim_y_between_workspaces();
             }
