@@ -37,6 +37,7 @@ window-rule {
     match is-window-cast-target=true
     match is-urgent=true
     match is-in-scratchpad=true
+    match is-sticky=true
     match at-startup=true
 
     // Properties that apply once upon window opening.
@@ -50,6 +51,7 @@ window-rule {
     open-floating true
     open-focused false
     open-in-scratchpad true
+    open-sticky true
 
     // Properties that apply continuously.
     draw-border-with-background false
@@ -358,6 +360,29 @@ window-rule {
 }
 ```
 
+#### `is-sticky`
+
+<sup>Since: next release</sup>
+
+Can be `true` or `false`.
+Matches [sticky windows](./Configuration:-Key-Bindings.md#toggle-window-sticky).
+
+> [!NOTE]
+> This matcher will apply only after the window is already open.
+> This means that you cannot use it to change the window opening properties like `open-sticky`.
+
+```kdl
+// Give sticky windows a different border color.
+window-rule {
+    match is-sticky=true
+
+    border {
+        active-color "#f5c2e7"
+        inactive-color "#9a6b8f"
+    }
+}
+```
+
 #### `at-startup`
 
 <sup>Since: 0.1.6</sup>
@@ -598,6 +623,25 @@ window-rule {
 Windows that open with a parent window (usually dialogs) ignore this rule.
 If a window was in the scratchpad when it unmapped, it is shown in the scratchpad again when it maps, even if this rule is `true`, so that for example showing the window from a tray icon works.
 Setting this rule to `false` for such a window makes it open as a regular window instead.
+
+#### `open-sticky`
+
+<sup>Since: next release</sup>
+
+Make the window [sticky](./Configuration:-Key-Bindings.md#toggle-window-sticky) when it opens, so that it follows you when you switch workspaces.
+The window opens floating, even with `open-floating false`.
+
+If the window also opens in the scratchpad (with `open-in-scratchpad`, or because it was in the scratchpad when it unmapped), the scratchpad wins and the window isn't sticky.
+
+```kdl
+// Keep picture-in-picture videos on screen, in the bottom right corner.
+window-rule {
+    match title="^Picture-in-Picture$"
+
+    open-sticky true
+    default-floating-position x=32 y=32 relative-to="bottom-right"
+}
+```
 
 > [!NOTE]
 > When the window opens on the last workspace of a monitor, niri adds an empty workspace below it as usual, and it stays after the window is hidden, as it would if you closed the window.

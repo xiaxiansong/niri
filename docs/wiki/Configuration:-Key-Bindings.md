@@ -466,6 +466,31 @@ window-rule {
 
 See the [IPC page](./IPC.md#scratchpad) for using the scratchpad from scripts.
 
+#### `toggle-window-sticky`
+
+<sup>Since: next release</sup>
+
+Make the focused window sticky, or not sticky if it is.
+A sticky window is a floating window that follows you when you switch workspaces on its monitor, for example a picture-in-picture video or a calculator.
+
+A tiled window becomes floating.
+A window in the scratchpad is taken out of it, since a window can't be in the scratchpad and sticky at the same time; hidden scratchpad windows can't be made sticky.
+With `--id`, a window on another workspace moves over to the active workspace of its monitor, without taking the focus.
+
+Sticky windows follow the active workspace in the same way as [shown scratchpad windows](#move-window-to-scratchpad-scratchpad-show-remove-window-from-scratchpad): they stay in place on the screen during a switch, stay focused if they were focused, and don't follow across monitors.
+Unlike scratchpad windows, `scratchpad-show` doesn't hide them.
+
+A window stops being sticky when it is moved to the tiling layout (including through fullscreen or maximize), moved to another workspace or monitor, or moved to the scratchpad.
+When you drag a sticky window with the mouse, it stays sticky if you drop it onto the floating layout of a monitor's active workspace.
+
+Windows can also open sticky with the [`open-sticky` window rule](./Configuration:-Window-Rules.md#open-sticky), and window rules can match sticky windows with [`is-sticky`](./Configuration:-Window-Rules.md#is-sticky).
+
+```kdl
+binds {
+    Mod+P { toggle-window-sticky; }
+}
+```
+
 #### `screenshot`, `screenshot-screen`, `screenshot-window`
 
 Actions for taking screenshots.

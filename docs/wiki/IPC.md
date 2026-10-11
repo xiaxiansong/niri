@@ -89,6 +89,8 @@ A window that is being dragged with the mouse has no `workspace_id` either, so c
 niri msg --json windows | jq '.[] | select(.is_in_scratchpad)'
 ```
 
+Similarly, `toggle-window-sticky` accepts a window `--id`, and windows have an `is_sticky` field for [sticky windows](./Configuration:-Key-Bindings.md#toggle-window-sticky).
+
 `scratchpad-show` only acts on windows that are already in the scratchpad.
 For example, a drop-down terminal script needs to handle three cases: the terminal isn't running, it's running but not in the scratchpad, or it's in the scratchpad:
 
