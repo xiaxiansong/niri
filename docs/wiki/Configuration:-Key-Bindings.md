@@ -376,7 +376,10 @@ When you switch workspaces on that monitor, they move along to the new active wo
 
 - `move-window-to-scratchpad` hides the focused window.
 A tiled window becomes floating.
-The first time a tiled window is hidden, its floating size comes from the `default-column-width` and `default-window-height` [window rules](./Configuration:-Window-Rules.md), or 60% of the working area if they are unset.
+The first time a tiled window is hidden, its floating size comes from the `default-column-width` and `default-window-height` [window rules](./Configuration:-Window-Rules.md), or 60% of the working area if they are unset, and it will be shown where a floating window of that size would open (see `default-floating-position`).
+These rules can match scratchpad windows with [`is-in-scratchpad`](./Configuration:-Window-Rules.md#is-in-scratchpad).
+niri asks the window for its new size as soon as it is hidden, so that the window already has that size when it's shown, rather than resizing on screen.
+A window that was floating keeps its size and position.
 This action does nothing if the window has open dialogs or other child windows.
 - `scratchpad-show` does the first of the following that applies:
   1. If the focused window is a shown scratchpad window, hide it.
@@ -424,7 +427,7 @@ Only when their monitor is disconnected do they move with the workspace to anoth
 Current limitations:
 
 - Dialogs and other child windows of a shown window don't follow it, they stay on the original workspace.
-- Hiding a window during a workspace switch animation makes it animate out with the sliding workspace rather than in place.
+- Some applications only redraw when they get frame callbacks, which hidden windows get about once a second, so such a window may still resize on screen if you show it right after hiding it.
 
 Activating a hidden window shows it: for example, clicking it in a taskbar, `focus-window --id`, or an application asking for focus (subject to the `on-xdg-activate` setting).
 When a hidden window opens a dialog, the window is shown first, and the dialog opens next to it.

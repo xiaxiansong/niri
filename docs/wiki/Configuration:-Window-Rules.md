@@ -333,7 +333,9 @@ Matches windows in the [scratchpad](./Configuration:-Key-Bindings.md#move-window
 
 > [!NOTE]
 > This matcher will apply only after the window is already open.
-> This means that you cannot use it to change the window opening properties like `default-window-height` or `open-in-scratchpad`.
+> This means that you cannot use it to change the window opening properties like `open-in-scratchpad`.
+>
+> The exception is the floating size and position of a tiled window that goes into the scratchpad: `default-column-width`, `default-window-height` and `default-floating-position` from rules matching `is-in-scratchpad=true` decide where it will be shown.
 
 Changing the rules of a window when it enters or leaves the scratchpad never moves it in or out of the scratchpad by itself.
 
@@ -343,6 +345,16 @@ window-rule {
     match is-in-scratchpad=true
 
     opacity 0.9
+}
+
+// Show tiled windows hidden in the scratchpad at the top center, at half of the screen width and
+// a third of its height. Windows that were floating keep their size and position.
+window-rule {
+    match is-in-scratchpad=true
+
+    default-column-width { proportion 0.5; }
+    default-window-height { proportion 0.333; }
+    default-floating-position x=0 y=0 relative-to="top"
 }
 ```
 
