@@ -1126,3 +1126,136 @@ fn remapped_window_without_outputs_stays_hidden() {
 
     assert_eq!(errors.errors(), Vec::<String>::new());
 }
+
+/// A tiled window "a" and a shown, focused scratchpad window "s".
+fn set_up_shown_scratchpad(config: &str) -> (Fixture, ClientId) {
+    let (f, id, _) = set_up_shown_scratchpad_with_surface(config);
+    (f, id)
+}
+
+fn set_up_shown_scratchpad_with_surface(config: &str) -> (Fixture, ClientId, WlSurface) {
+    let (mut f, id) = set_up_with_config(config);
+    map_window(&mut f, id, "a", None);
+    let surface = map_window(&mut f, id, "s", None);
+
+    f.niri_state()
+        .do_action(Action::MoveWindowToScratchpad, false);
+    f.double_roundtrip(id);
+    f.niri_state()
+        .do_action(Action::ScratchpadShow(None), false);
+    f.double_roundtrip(id);
+    (f, id, surface)
+}
+
+fn focus_window(f: &mut Fixture, id: ClientId, t: &str) {
+    let window_id = window_id(f, t);
+    f.niri_state()
+        .do_action(Action::FocusWindow(window_id), false);
+    f.double_roundtrip(id);
+}
+
+#[test]
+fn hide_on_focus_loss() {
+    let (mut f, id) = set_up_shown_scratchpad("scratchpad { hide-on-focus-loss; }");
+    assert_snapshot!(format_windows(&mut f), @"
+    a: None, floating: false, workspace: true, focused: false
+    s: Shown, floating: true, workspace: true, focused: true
+    ");
+
+    focus_window(&mut f, id, "a");
+    assert_snapshot!(format_windows(&mut f), @"
+    a: None, floating: false, workspace: true, focused: true
+    s: Hidden, floating: true, workspace: false, focused: false
+    ");
+}
+
+#[test]
+fn focus_loss_without_option_keeps_window_shown() {
+    let (mut f, id) = set_up_shown_scratchpad("");
+
+    focus_window(&mut f, id, "a");
+    assert_snapshot!(format_windows(&mut f), @"
+    a: None, floating: false, workspace: true, focused: true
+    s: Shown, floating: true, workspace: true, focused: false
+    ");
+}
+
+#[test]
+fn focus_loss_to_dialog_keeps_window_shown() {
+    let (mut f, id, surface) =
+        set_up_shown_scratchpad_with_surface("scratchpad { hide-on-focus-loss; }");
+
+    // The dialog takes the focus, but its parent can't hide while it's open.
+    let parent = f.client(id).window(&surface).xdg_toplevel.clone();
+    map_window(&mut f, id, "d", Some(&parent));
+    assert_snapshot!(format_windows(&mut f), @"
+    a: None, floating: false, workspace: true, focused: false
+    d: None, floating: true, workspace: true, focused: true
+    s: Shown, floating: true, workspace: true, focused: false
+    ");
+}
+
+#[test]
+fn focus_loss_in_overview_waits_for_closing() {
+    let (mut f, id) = set_up_shown_scratchpad("scratchpad { hide-on-focus-loss; }");
+
+    f.niri_state().do_action(Action::ToggleOverview, false);
+    f.double_roundtrip(id);
+    focus_window(&mut f, id, "a");
+    assert_snapshot!(format_windows(&mut f), @"
+    a: None, floating: false, workspace: true, focused: true
+    s: Shown, floating: true, workspace: true, focused: false
+    ");
+
+    f.niri_state().do_action(Action::ToggleOverview, false);
+    f.double_roundtrip(id);
+    assert_snapshot!(format_windows(&mut f), @"
+    a: None, floating: false, workspace: true, focused: true
+    s: Hidden, floating: true, workspace: false, focused: false
+    ");
+}
+
+/// Runs focus-follows-mouse as if the pointer moved onto window "a".
+fn focus_follows_mouse_to_a(f: &mut Fixture, id: ClientId) {
+    let a = {
+        let mut windows = f.niri().layout.windows();
+        let (_, mapped) = windows.find(|(_, mapped)| title(mapped) == "a").unwrap();
+        mapped.window.clone()
+    };
+    let contents = crate::niri::PointContents {
+        output: Some(f.niri_output(1)),
+        window: Some((
+            a,
+            crate::layout::HitType::Activate {
+                is_tab_indicator: false,
+            },
+        )),
+        ..Default::default()
+    };
+    f.niri().handle_focus_follows_mouse(&contents);
+    f.double_roundtrip(id);
+}
+
+#[test]
+fn focus_follows_mouse_keeps_scratchpad_focus() {
+    let (mut f, id) = set_up_shown_scratchpad(
+        "input { focus-follows-mouse; }\nscratchpad { hide-on-focus-loss; }",
+    );
+
+    focus_follows_mouse_to_a(&mut f, id);
+    assert_snapshot!(format_windows(&mut f), @"
+    a: None, floating: false, workspace: true, focused: false
+    s: Shown, floating: true, workspace: true, focused: true
+    ");
+}
+
+#[test]
+fn focus_follows_mouse_without_option_moves_focus() {
+    let (mut f, id) = set_up_shown_scratchpad("input { focus-follows-mouse; }");
+
+    focus_follows_mouse_to_a(&mut f, id);
+    assert_snapshot!(format_windows(&mut f), @"
+    a: None, floating: false, workspace: true, focused: true
+    s: Shown, floating: true, workspace: true, focused: false
+    ");
+}

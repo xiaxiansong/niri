@@ -350,6 +350,8 @@ pub struct Niri {
     pub bind_repeat_timer: Option<RegistrationToken>,
     pub keyboard_focus: KeyboardFocus,
     pub layer_shell_on_demand_focus: Option<LayerSurface>,
+    /// Shown scratchpad window that had the layout focus, for hide-on-focus-loss.
+    pub scratchpad_focus: Option<Window>,
     pub idle_inhibiting_surfaces: HashSet<WlSurface>,
     pub is_fdo_idle_inhibited: Arc<AtomicBool>,
     pub keyboard_shortcuts_inhibiting_surfaces: HashMap<WlSurface, KeyboardShortcutsInhibitor>,
@@ -827,6 +829,7 @@ impl State {
         // These should be called periodically, before flushing the clients.
         self.niri.popups.cleanup();
         self.refresh_popup_grab();
+        self.hide_scratchpad_on_focus_loss();
         self.update_keyboard_focus();
 
         // Should be called before refresh_layout() because that one will refresh other window
@@ -1135,6 +1138,37 @@ impl State {
 
         // FIXME: granular
         self.niri.queue_redraw_all();
+    }
+
+    /// Hides the shown scratchpad window that lost the layout focus, with hide-on-focus-loss.
+    ///
+    /// The window stays shown when it has a dialog, since it can't be hidden then.
+    fn hide_scratchpad_on_focus_loss(&mut self) {
+        if !self.niri.config.borrow().scratchpad.hide_on_focus_loss {
+            self.niri.scratchpad_focus = None;
+            return;
+        }
+
+        // The focus moves around while browsing the overview or the window switcher, so decide
+        // where it ended up once they close.
+        if self.niri.layout.is_overview_open() || self.niri.window_mru_ui.is_open() {
+            return;
+        }
+
+        let focus = self.niri.layout.focus().map(|mapped| mapped.window.clone());
+
+        if let Some(prev) = self.niri.scratchpad_focus.take() {
+            if focus.as_ref() != Some(&prev)
+                && self.niri.layout.is_scratchpad_shown(&prev)
+                && self.niri.layout.move_to_scratchpad(Some(&prev)).is_some()
+            {
+                self.on_window_hidden_to_scratchpad(&prev);
+                // FIXME: granular
+                self.niri.queue_redraw_all();
+            }
+        }
+
+        self.niri.scratchpad_focus = focus.filter(|win| self.niri.layout.is_scratchpad_shown(win));
     }
 
     /// Cleans up after a window was hidden in the scratchpad.
@@ -2822,6 +2856,7 @@ impl Niri {
             seat,
             keyboard_focus: KeyboardFocus::Layout { surface: None },
             layer_shell_on_demand_focus: None,
+            scratchpad_focus: None,
             idle_inhibiting_surfaces: HashSet::new(),
             is_fdo_idle_inhibited: Arc::new(AtomicBool::new(false)),
             keyboard_shortcuts_inhibiting_surfaces: HashMap::new(),
@@ -6918,14 +6953,25 @@ impl Niri {
         // Recompute the current pointer focus because we don't update it during animations.
         let current_focus = self.contents_under(pointer.current_location());
 
+        // With hide-on-focus-loss, moving the mouse off a shown scratchpad window would hide it.
+        // Keep the focus on it until a click or a focus action instead.
+        let keep_focus = self.config.borrow().scratchpad.hide_on_focus_loss
+            && self
+                .layout
+                .focus()
+                .is_some_and(|mapped| self.layout.is_scratchpad_shown(&mapped.window));
+
         if let Some(output) = &new_focus.output {
-            if current_focus.output.as_ref() != Some(output) {
+            if !keep_focus && current_focus.output.as_ref() != Some(output) {
                 self.layout.focus_output(output);
             }
         }
 
         if let Some(window) = &new_focus.window {
-            if !self.layout.is_overview_open() && current_focus.window.as_ref() != Some(window) {
+            if !keep_focus
+                && !self.layout.is_overview_open()
+                && current_focus.window.as_ref() != Some(window)
+            {
                 let (window, hit) = window;
 
                 // Don't trigger focus-follows-mouse over the tab indicator.

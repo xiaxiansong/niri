@@ -3823,7 +3823,7 @@ impl<W: LayoutElement> Layout<W> {
     }
 
     /// Returns whether the window is in the scratchpad and shown, possibly being moved.
-    fn is_scratchpad_shown(&self, window: &W::Id) -> bool {
+    pub fn is_scratchpad_shown(&self, window: &W::Id) -> bool {
         if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
             if move_.tile.window().id() == window {
                 return move_.tile.in_scratchpad;
