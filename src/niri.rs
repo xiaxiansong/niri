@@ -14,6 +14,7 @@ use _server_decoration::server::org_kde_kwin_server_decoration_manager::Mode as 
 use anyhow::{bail, ensure, Context};
 use calloop::futures::Scheduler;
 use niri_config::debug::PreviewRender;
+use niri_config::input::FocusFollowsMouse;
 use niri_config::output::MaxBpc;
 use niri_config::window_rule::VrrRule;
 use niri_config::{
@@ -408,6 +409,8 @@ pub struct Niri {
     pub pointer_contents: PointContents,
     pub pointer_visibility: PointerVisibility,
     pub pointer_inactivity_timer: Option<RegistrationToken>,
+    /// Pending focus-follows-mouse focus of the window under the pointer, with `delay-ms`.
+    pub focus_follows_mouse_timer: Option<FocusFollowsMouseTimer>,
     /// Whether the pointer inactivity timer got reset this event loop iteration.
     ///
     /// Used for limiting the reset to once per iteration, so that it's not spammed with high
@@ -579,6 +582,15 @@ pub enum KeyboardFocus {
     ExitConfirmDialog,
     Overview,
     Mru,
+}
+
+/// Pending delayed focus-follows-mouse focus.
+pub struct FocusFollowsMouseTimer {
+    /// Window to focus once the delay has passed, if the pointer is still over it.
+    window: Window,
+    /// Window that was focused when the pointer moved onto `window`.
+    focus_before: Option<Window>,
+    token: RegistrationToken,
 }
 
 #[derive(Default, Clone, PartialEq)]
@@ -3037,6 +3049,7 @@ impl Niri {
             pointer_contents: PointContents::default(),
             pointer_visibility: PointerVisibility::Visible,
             pointer_inactivity_timer: None,
+            focus_follows_mouse_timer: None,
             pointer_inactivity_timer_got_reset: false,
             notified_activity_this_iteration: false,
             pointer_inside_hot_corner: false,
@@ -7134,6 +7147,13 @@ impl Niri {
     }
 
     pub fn handle_focus_follows_mouse(&mut self, new_focus: &PointContents) {
+        // Moving the pointer off the window waiting for its delayed focus cancels the focus.
+        if let Some(timer) = &self.focus_follows_mouse_timer {
+            if new_focus.window.as_ref().map(|(window, _)| window) != Some(&timer.window) {
+                self.cancel_focus_follows_mouse_timer();
+            }
+        }
+
         let Some(ffm) = self.config.borrow().input.focus_follows_mouse else {
             return;
         };
@@ -7150,13 +7170,7 @@ impl Niri {
         // Recompute the current pointer focus because we don't update it during animations.
         let current_focus = self.contents_under(pointer.current_location());
 
-        // With hide-on-focus-loss, moving the mouse off a shown scratchpad window would hide it.
-        // Keep the focus on it until a click or a focus action instead.
-        let keep_focus = self.config.borrow().scratchpad.hide_on_focus_loss
-            && self
-                .layout
-                .focus()
-                .is_some_and(|mapped| self.layout.is_scratchpad_shown(&mapped.window));
+        let keep_focus = self.focus_follows_mouse_keeps_focus();
 
         if let Some(output) = &new_focus.output {
             if !keep_focus && current_focus.output.as_ref() != Some(output) {
@@ -7181,18 +7195,19 @@ impl Niri {
                     return;
                 }
 
-                if !self.layout.should_trigger_focus_follows_mouse_on(window) {
+                if !self.focus_follows_mouse_allowed_on(window, ffm) {
                     return;
                 }
 
-                if let Some(threshold) = ffm.max_scroll_amount {
-                    if self.layout.scroll_amount_to_activate(window) > threshold.0 {
-                        return;
+                match ffm.delay_ms.filter(|delay_ms| *delay_ms > 0) {
+                    Some(delay_ms) => {
+                        self.start_focus_follows_mouse_timer(window.clone(), delay_ms)
+                    }
+                    None => {
+                        self.layout.activate_window_without_raising(window);
+                        self.layer_shell_on_demand_focus = None;
                     }
                 }
-
-                self.layout.activate_window_without_raising(window);
-                self.layer_shell_on_demand_focus = None;
             }
         }
 
@@ -7201,6 +7216,108 @@ impl Niri {
                 self.layer_shell_on_demand_focus = Some(layer.clone());
             }
         }
+    }
+
+    /// Whether focus-follows-mouse should leave the current focus alone.
+    fn focus_follows_mouse_keeps_focus(&self) -> bool {
+        // With hide-on-focus-loss, moving the mouse off a shown scratchpad window would hide it.
+        // Keep the focus on it until a click or a focus action instead.
+        self.config.borrow().scratchpad.hide_on_focus_loss
+            && self
+                .layout
+                .focus()
+                .is_some_and(|mapped| self.layout.is_scratchpad_shown(&mapped.window))
+    }
+
+    fn focus_follows_mouse_allowed_on(&self, window: &Window, ffm: FocusFollowsMouse) -> bool {
+        if !self.layout.should_trigger_focus_follows_mouse_on(window) {
+            return false;
+        }
+
+        if let Some(threshold) = ffm.max_scroll_amount {
+            if self.layout.scroll_amount_to_activate(window) > threshold.0 {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn start_focus_follows_mouse_timer(&mut self, window: Window, delay_ms: u16) {
+        self.cancel_focus_follows_mouse_timer();
+
+        let timer = Timer::from_duration(Duration::from_millis(u64::from(delay_ms)));
+        let token = self
+            .event_loop
+            .insert_source(timer, |_, _, state| {
+                if let Some(timer) = state.niri.focus_follows_mouse_timer.take() {
+                    state.niri.focus_follows_mouse_after_delay(timer);
+                }
+                TimeoutAction::Drop
+            })
+            .unwrap();
+        let focus_before = self.layout.focus().map(|mapped| mapped.window.clone());
+        self.focus_follows_mouse_timer = Some(FocusFollowsMouseTimer {
+            window,
+            focus_before,
+            token,
+        });
+    }
+
+    fn cancel_focus_follows_mouse_timer(&mut self) {
+        if let Some(timer) = self.focus_follows_mouse_timer.take() {
+            self.event_loop.remove(timer.token);
+        }
+    }
+
+    /// Focuses the window under the pointer once the focus-follows-mouse delay has passed.
+    ///
+    /// Things may have changed during the delay, so this checks everything again.
+    fn focus_follows_mouse_after_delay(&mut self, timer: FocusFollowsMouseTimer) {
+        let window = &timer.window;
+
+        let Some(ffm) = self.config.borrow().input.focus_follows_mouse else {
+            return;
+        };
+
+        let pointer = self.seat.get_pointer().unwrap();
+        if pointer.is_grabbed() || self.window_mru_ui.is_open() || self.layout.is_overview_open() {
+            return;
+        }
+
+        if self.focus_follows_mouse_keeps_focus() {
+            return;
+        }
+
+        let under = self.contents_under(pointer.current_location());
+        let Some((under, hit)) = &under.window else {
+            return;
+        };
+        if under != window
+            || matches!(
+                hit,
+                HitType::Activate {
+                    is_tab_indicator: true
+                }
+            )
+        {
+            return;
+        }
+
+        // If the focus changed in the meantime, for example with a focus action, keep that focus,
+        // like it would have been without the delay.
+        let focus = self.layout.focus().map(|mapped| &mapped.window);
+        if focus != timer.focus_before.as_ref() {
+            return;
+        }
+
+        if !self.focus_follows_mouse_allowed_on(window, ffm) {
+            return;
+        }
+
+        self.layout.activate_window_without_raising(window);
+        self.layer_shell_on_demand_focus = None;
+        self.queue_redraw_all();
     }
 
     pub fn do_screen_transition(&mut self, renderer: &mut GlesRenderer, delay_ms: Option<u16>) {
