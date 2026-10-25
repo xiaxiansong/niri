@@ -370,6 +370,19 @@ input {
 }
 ```
 
+<sup>Since: next release</sup> You can also set `delay-ms`.
+Then, a window is focused only if the pointer is still over it this many milliseconds after moving onto it.
+This way, windows that you only pass over on the way to another one don't get focused.
+If the focus changes during the delay, for example with a key binding, niri keeps that focus.
+The delay only applies to windows: outputs and layer-shell surfaces are focused right away.
+
+```kdl
+input {
+    // Focus a window once the pointer has been over it for 100 ms.
+    focus-follows-mouse delay-ms=100
+}
+```
+
 #### `workspace-auto-back-and-forth`
 
 Normally, switching to the same workspace by index twice will do nothing (since you're already on that workspace).
