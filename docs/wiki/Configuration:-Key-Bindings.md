@@ -491,6 +491,26 @@ binds {
 }
 ```
 
+#### `focus-urgent-window`
+
+<sup>Since: next release</sup>
+
+Focus the window that most recently asked for attention, that is, the most recent window that was marked urgent, for example by an application that got a new message.
+If that window is on another workspace or monitor, niri switches to it.
+A hidden scratchpad window is shown.
+
+Focusing a window clears its urgency, so pressing the bind again goes to the window that asked for attention before that one.
+If no window is urgent, nothing happens.
+
+Windows are marked urgent when an application requests activation without being allowed to take the focus; see the [`on-xdg-activate` window rule](./Configuration:-Window-Rules.md#on-xdg-activate).
+You can also mark them with `set-window-urgent` and `toggle-window-urgent`.
+
+```kdl
+binds {
+    Mod+A { focus-urgent-window; }
+}
+```
+
 #### `screenshot`, `screenshot-screen`, `screenshot-window`
 
 Actions for taking screenshots.
