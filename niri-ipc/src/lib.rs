@@ -340,6 +340,10 @@ pub enum Action {
     },
     /// Focus the previously focused window.
     FocusWindowPrevious {},
+    /// Focus the window that most recently asked for attention (is urgent).
+    ///
+    /// Does nothing if no window is urgent.
+    FocusUrgentWindow {},
     /// Focus the column to the left.
     FocusColumnLeft {},
     /// Focus the column to the right.

@@ -973,6 +973,19 @@ impl State {
                     self.focus_window(&window);
                 }
             }
+            Action::FocusUrgentWindow => {
+                if let Some(window) = self
+                    .niri
+                    .layout
+                    .windows()
+                    .map(|(_, win)| win)
+                    .filter(|win| win.is_urgent())
+                    .max_by_key(|win| win.urgent_timestamp())
+                    .map(|win| win.window.clone())
+                {
+                    self.focus_window(&window);
+                }
+            }
             Action::SwitchLayout(action) => {
                 let keyboard = &self.niri.seat.get_keyboard().unwrap();
                 keyboard.with_xkb_state(self, |mut state| match action {

@@ -10,6 +10,7 @@ mod binds;
 mod close_focus;
 mod floating;
 mod focus_follows_mouse;
+mod focus_urgent;
 mod fullscreen;
 mod layer_shell;
 mod remove_output;

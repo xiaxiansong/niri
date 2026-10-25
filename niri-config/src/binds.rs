@@ -162,6 +162,7 @@ pub enum Action {
     FocusWindow(u64),
     FocusWindowInColumn(#[knuffel(argument)] u8),
     FocusWindowPrevious,
+    FocusUrgentWindow,
     FocusColumnLeft,
     #[knuffel(skip)]
     FocusColumnLeftUnderMouse,
@@ -465,6 +466,7 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::FocusWindow { id } => Self::FocusWindow(id),
             niri_ipc::Action::FocusWindowInColumn { index } => Self::FocusWindowInColumn(index),
             niri_ipc::Action::FocusWindowPrevious {} => Self::FocusWindowPrevious,
+            niri_ipc::Action::FocusUrgentWindow {} => Self::FocusUrgentWindow,
             niri_ipc::Action::FocusColumnLeft {} => Self::FocusColumnLeft,
             niri_ipc::Action::FocusColumnRight {} => Self::FocusColumnRight,
             niri_ipc::Action::FocusColumnFirst {} => Self::FocusColumnFirst,

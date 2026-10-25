@@ -42,7 +42,7 @@ use crate::render_helpers::{background_effect, BakedBuffer, RenderCtx, RenderTar
 use crate::utils::id::IdCounter;
 use crate::utils::transaction::Transaction;
 use crate::utils::{
-    get_credentials_for_surface, send_scale_transform, update_tiled_state,
+    get_credentials_for_surface, get_monotonic_time, send_scale_transform, update_tiled_state,
     with_toplevel_last_uncommitted_configure, with_toplevel_role, with_toplevel_role_and_current,
     ResizeEdge,
 };
@@ -87,6 +87,9 @@ pub struct Mapped {
 
     /// Whether this has an urgent indicator.
     is_urgent: bool,
+
+    /// Most recent monotonic time when the window was marked urgent.
+    urgent_timestamp: Option<Duration>,
 
     /// Whether this window has the keyboard focus.
     is_focused: bool,
@@ -292,6 +295,7 @@ impl Mapped {
             needs_frame_callback: false,
             offscreen_data: RefCell::new(None),
             is_urgent: false,
+            urgent_timestamp: None,
             is_focused: false,
             is_active_in_column: true,
             is_floating: false,
@@ -614,10 +618,18 @@ impl Mapped {
         let changed = self.is_urgent != urgent;
         self.is_urgent = urgent;
         self.need_to_recompute_rules |= changed;
+
+        if urgent {
+            self.urgent_timestamp = Some(get_monotonic_time());
+        }
     }
 
     pub fn is_urgent(&self) -> bool {
         self.is_urgent
+    }
+
+    pub fn urgent_timestamp(&self) -> Option<Duration> {
+        self.urgent_timestamp
     }
 }
 
